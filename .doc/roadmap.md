@@ -1,4 +1,4 @@
-# Kaleido 路线图
+# 宝石棱镜 · GemPrismUpscaler 路线图
 
 每个阶段以"可验证的最小闭环"为单位，不追求功能齐全再验收。
 
@@ -6,36 +6,49 @@
 
 ## M0 · 最小可用闭环
 
-**目标**：在目标环境下，对窗口化的游戏完成一次从捕获到超分的完整链路，且能安全退出。
+**目标**：在目标环境下，对窗口化的视觉小说完成一次从捕获到超分的完整链路，且能安全退出。
+
+### 当前进度（2026-11-02）
+
+| 项 | 状态 |
+|---|---|
+| M0a：捕获/4K overlay/输入/热键/弹窗/UI/60fps | ✅ 已跑通 |
+| M0b：Anime4K/FSR 效果 | ⏳ 未开始 |
+| M0 混合管线实验 | ⏳ 未开始 |
+| 真实游戏验收（腐姬 / 秽翼的尤斯蒂娅） | ⏳ 待用户验证 |
+
+M0a 的 60fps 是合成 1280×720 测试窗口的结果，不等于最终 M0 验收。
 
 ### 范围
 
 | 模块 | 内容 |
 |---|---|
-| 捕获 | X11 / XWayland 窗口，XComposite + XDamage + XShm |
-| 超分 | Anime4K 2× + Lanczos 收尾，固定一套管线 |
-| 呈现 | override-redirect 全屏窗口，逻辑尺寸 2560×1440（150% 缩放） |
-| 输入 | 点击穿透 + 全局热键 |
-| 弹窗 | 窗口监控 + 让位 |
+| 捕获 | X11 / XWayland 窗口，XShm 直读 + XDamage 帧级跳过 |
+| 超分 | M0a：Vulkan 双线性；M0b：Anime4K 2× + Lanczos 收尾 |
+| 呈现 | override-redirect 全屏窗口，物理尺寸 3840×2160（X11 root 尺寸） |
+| 输入 | overlay 接收鼠标 + 坐标映射 + `XSendEvent` 转发 + 全局热键 |
+| 弹窗 | 250ms 窗口轮询 + 让位 |
 | 界面 | Avalonia 最小配置页（选择窗口、开关、退出） |
-| 混合管线 | **尝试实现**，见下方决策点 |
+| 混合管线 | **时间盒实验**，见下方决策点 |
 
 ### 验收标准
 
-1. 1280×720 窗口的游戏，开启超分后全屏显示，画面比例正确
-2. 点击、键盘操作能正常推进游戏，无卡顿
-3. 游戏弹出确认对话框时，超分画面自动让位，对话框可见可操作
-4. 关闭超分或退出游戏后，桌面恢复原状，无残留窗口
-5. 端到端延迟 < 16 ms
-6. 在 100% 与 150% 系统缩放下均正确
+1. 1280×720 窗口的游戏，开启超分后全屏显示，画面比例正确。
+2. 在超分画面的任意位置点击都能推进游戏；键盘操作正常；无卡顿。
+3. 游戏弹出确认对话框时，超分画面自动让位，对话框可见可操作。
+4. 关闭超分或退出游戏后，桌面恢复原状，无残留窗口。
+5. 画面连续变化段平均 ≥60fps；静止段不重复捕获/呈现、GPU 接近空闲。腐姬若源上限 <60，按“达到源上限且不额外掉帧”验收。
+6. 在 100% 与 150% 系统缩放下均正确。
 
 ### 混合管线决策点
 
-M0 尝试同时实现 Vulkan 与 OpenGL 两条 effect 执行路径，通过 DMA-BUF 交接。
+M0a 闭环跑通后，用 2 周时间盒尝试 Vulkan + OpenGL 两条 effect 路径，通过 DMA-BUF 交接。
+
+关键前提：GL 必须与 Vulkan 在同一块 GPU 上。本机 XWayland GLX 在 AMD，Vulkan 在 NVIDIA，因此必须用 **headless EGL surfaceless context（NVIDIA）**，不能直接用 GLX。已验证 GL 纹理可导出 DMA-BUF；Vulkan 导入与同步仍需 spike。
 
 **降级条件**（满足任一即切换为全 Vulkan）：
 
-- 时间盒耗尽（建议 2 周）仍未跑通稳定链路
+- 时间盒耗尽仍未跑通稳定链路
 - 跨 API 路径在目标驱动上出现不可复现的同步问题
 - 需要为混合路径引入超过 300 行的额外状态管理
 
@@ -46,7 +59,7 @@ M0 尝试同时实现 Vulkan 与 OpenGL 两条 effect 执行路径，通过 DMA-
 - 原生 Wayland 窗口
 - 多显示器
 - HDR
-- 核显与混合显卡
+- FPS/鼠标视角/raw input 游戏
 - 动画
 - 自动 Profile 匹配
 
@@ -60,7 +73,7 @@ M0 尝试同时实现 Vulkan 与 OpenGL 两条 effect 执行路径，通过 DMA-
 
 | 模块 | 内容 |
 |---|---|
-| 脏矩形 | 只重算变化区域，静止画面近乎零开销 |
+| 脏矩形 | 只重算变化区域；XDamage 在 XWayland 常报全窗口，需分块哈希 |
 | 动画 | 进出超分的缩放过渡 |
 | Profile | 按 exe 名 / 窗口类名自动套用配置 |
 | 零拷贝 | DRI3 + DMA-BUF，替换 XShm 回读 |
@@ -86,7 +99,7 @@ M0 尝试同时实现 Vulkan 与 OpenGL 两条 effect 执行路径，通过 DMA-
 | 模块 | 内容 |
 |---|---|
 | Wayland 捕获 | xdg-desktop-portal + PipeWire + DMA-BUF，支持 `restore_token` 持久授权 |
-| Wayland 呈现 | wlr-layer-shell overlay + 空 input region + `keyboard_interactivity=none` |
+| Wayland 呈现 | wlr-layer-shell overlay + 空 input region + `keyboard_interactivity=none`（KWin 6.8 已提供 layer-shell v5） |
 | 混合管线 | 补齐 M0 降级时跳过的 GL 执行路径 |
 | 多显示器 | 覆盖窗口定位到游戏所在屏幕，处理不同 DPI |
 | 色彩管理 | linear 工作空间，可选 HDR 直通 |

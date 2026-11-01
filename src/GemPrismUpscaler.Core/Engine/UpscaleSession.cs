@@ -1,0 +1,327 @@
+using GemPrismUpscaler.Core.Diagnostics;
+using GemPrismUpscaler.Core.Geometry;
+using GemPrismUpscaler.Core.Platform.Linux.X11;
+using GemPrismUpscaler.Core.Rendering;
+
+namespace GemPrismUpscaler.Core.Engine;
+
+/// <summary>
+/// M0a engine: capture a source X11 window, present a full-screen Vulkan overlay,
+/// forward pointer input, and hide for popup windows of the same process.
+/// Frame-driven: static source content does not cause repeated captures/presents.
+/// </summary>
+public sealed class UpscaleSession : IDisposable
+{
+    private readonly WindowInfo _source;
+    private readonly ScalingMode _mode;
+    private readonly ManualResetEventSlim _started = new(false);
+    private readonly object _gate = new();
+    private Thread? _thread;
+    private X11Display? _display;
+    private X11Overlay? _overlay;
+    private X11Capture? _capture;
+    private X11Damage? _damage;
+    private X11Input? _input;
+    private X11Hotkey? _hotkey;
+    private VulkanBlitter? _blitter;
+    private volatile bool _stop;
+    private volatile bool _userHidden;
+    private bool _popupHidden;
+    private bool _disposed;
+    private Exception? _initError;
+    private int _screenWidth;
+    private int _screenHeight;
+
+    public event Action<string>? Message;
+
+    public RectI DestRect { get; private set; }
+    public ulong OverlayWindowId => _overlay?.Window ?? 0;
+    public bool IsRunning => _thread is { IsAlive: true };
+    public string OverlayTitle => "GemPrismOverlay";
+
+    public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit)
+    {
+        _source = source;
+        _mode = mode;
+    }
+
+    public void Start()
+    {
+        if (_thread is not null) throw new InvalidOperationException("already started");
+        _thread = new Thread(Run) { IsBackground = true, Name = "GemPrism-Render" };
+        _thread.Start();
+        if (!_started.Wait(TimeSpan.FromSeconds(15)))
+            throw new TimeoutException("engine initialization timed out");
+        if (_initError is not null)
+            throw new InvalidOperationException($"engine initialization failed: {_initError.Message}", _initError);
+    }
+
+    public void Stop()
+    {
+        _stop = true;
+        var t = _thread;
+        if (t is not null && t.IsAlive && t != Thread.CurrentThread)
+            t.Join(TimeSpan.FromSeconds(8));
+    }
+
+    private void Run()
+    {
+        try
+        {
+            Initialize();
+            _started.Set();
+            Loop();
+        }
+        catch (Exception ex)
+        {
+            _initError ??= ex;
+            Emit($"engine error: {ex.GetType().Name}: {ex.Message}");
+            _started.Set();
+        }
+        finally
+        {
+            Cleanup();
+        }
+    }
+
+    private void Initialize()
+    {
+        _display = new X11Display();
+        _screenWidth = _display.Width;
+        _screenHeight = _display.Height;
+
+        var geometry = GetSourceGeometry();
+        if (geometry is null) throw new InvalidOperationException("source window is not readable");
+        DestRect = LayoutCalculator.ComputeDestRect(geometry.Value.Width, geometry.Value.Height,
+            _screenWidth, _screenHeight, _mode);
+
+        _overlay = new X11Overlay(_display, _screenWidth, _screenHeight);
+        _capture = new X11Capture(_display, _source.WindowId, geometry.Value.Width, geometry.Value.Height);
+        _damage = new X11Damage(_display, _source.WindowId);
+        _input = new X11Input(_display, _source.WindowId);
+        _hotkey = new X11Hotkey(_display);
+        _blitter = new VulkanBlitter(_display, _overlay.Window, _screenWidth, _screenHeight);
+
+        Emit($"engine started source=0x{_source.WindowId:x} '{_source.Title}' {geometry.Value.Width}x{geometry.Value.Height} " +
+             $"screen={_screenWidth}x{_screenHeight} dest={DestRect} device='{_blitter.DeviceName}' " +
+             $"format={_blitter.SwapchainFormatName} extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} damage={_damage.Available} hotkey={_hotkey.IsGrabbed} " +
+             $"overlay=0x{_overlay.Window:x}");
+    }
+
+    private (int Width, int Height)? GetSourceGeometry()
+    {
+        if (_display is null) return null;
+        if (X11Native.XGetGeometry(_display.Handle, _source.WindowId, out _, out _, out _,
+                out uint width, out uint height, out _, out _) == 0)
+            return null;
+        if (width < 2 || height < 2) return null;
+        return ((int)width, (int)height);
+    }
+
+    private void Loop()
+    {
+        bool dirty = true;
+        long lastPopupCheck = 0;
+        long lastFallback = 0;
+        int captureFailures = 0;
+        var stats = new FrameStats();
+
+        while (!_stop)
+        {
+            ProcessEvents(ref dirty);
+
+            if (_blitter is null || _capture is null || _overlay is null || _display is null || _input is null)
+                break;
+
+            long now = Environment.TickCount64;
+            if (_source.Pid > 0 && now - lastPopupCheck >= 250)
+            {
+                lastPopupCheck = now;
+                TrackPopups();
+            }
+
+            if (!_overlay.IsVisible)
+            {
+                dirty = false;
+                Thread.Sleep(10);
+                continue;
+            }
+
+            bool fallback = _damage is null || !_damage.Available;
+            if (fallback && now - lastFallback >= 16)
+            {
+                lastFallback = now;
+                dirty = true;
+            }
+
+            if (dirty)
+            {
+                dirty = false;
+                var geom = GetSourceGeometry();
+                if (geom is null)
+                {
+                    Emit("source window closed");
+                    break;
+                }
+                if (geom.Value.Width != _capture.Width || geom.Value.Height != _capture.Height)
+                {
+                    _capture.Recreate(geom.Value.Width, geom.Value.Height);
+                    DestRect = LayoutCalculator.ComputeDestRect(geom.Value.Width, geom.Value.Height,
+                        _screenWidth, _screenHeight, _mode);
+                    Emit($"source resized to {geom.Value.Width}x{geom.Value.Height} dest={DestRect}");
+                }
+
+                if (!_capture.TryCapture())
+                {
+                    captureFailures++;
+                    if (captureFailures > 30)
+                    {
+                        Emit("capture failed repeatedly; stopping");
+                        break;
+                    }
+                }
+                else
+                {
+                    captureFailures = 0;
+                    stats.OnCaptured();
+                    try
+                    {
+                        _blitter.Render(_capture.Buffer, _capture.Width, _capture.Height, _capture.Stride, DestRect);
+                        stats.OnPresented();
+                    }
+                    catch (Exception ex)
+                    {
+                        Emit($"present error: {ex.GetType().Name}: {ex.Message}");
+                        break;
+                    }
+                }
+            }
+
+            var report = stats.Tick();
+            if (report is not null)
+                Emit($"stats {report} hidden={_overlay.IsVisible == false} popup={_popupHidden} userHidden={_userHidden}");
+
+            Thread.Sleep(2);
+        }
+
+        Emit("engine loop exited");
+    }
+
+    private void ProcessEvents(ref bool dirty)
+    {
+        if (_display is null) return;
+        while (X11Native.XPending(_display.Handle) > 0)
+        {
+            X11Native.XEvent ev = default;
+            X11Native.XNextEvent(_display.Handle, ref ev);
+
+            if (_damage is not null && _damage.IsDamageEvent(ev))
+            {
+                dirty = true;
+                _damage.Acknowledge();
+                continue;
+            }
+
+            if (_hotkey is not null && _hotkey.IsHotkey(ev))
+            {
+                _userHidden = !_userHidden;
+                ApplyVisibility();
+                dirty = true;
+                Emit(_userHidden ? "hotkey: overlay hidden" : "hotkey: overlay shown");
+                continue;
+            }
+
+            if (_overlay is null || _input is null) continue;
+            if (ev.Window != _overlay.Window) continue;
+
+            switch (ev.Type)
+            {
+                case 4: // ButtonPress
+                    if (ev.Detail == 4 || ev.Detail == 5)
+                        _input.ForwardWheel((int)ev.X, (int)ev.Y, Mapper, ev.Detail == 4);
+                    else
+                        _input.ForwardButton((int)ev.X, (int)ev.Y, Mapper, ev.Detail, true);
+                    break;
+                case 5: // ButtonRelease
+                    if (ev.Detail != 4 && ev.Detail != 5)
+                        _input.ForwardButton((int)ev.X, (int)ev.Y, Mapper, ev.Detail, false);
+                    break;
+                case 6: // MotionNotify
+                    _input.ForwardMotion((int)ev.X, (int)ev.Y, Mapper);
+                    break;
+            }
+        }
+    }
+
+    private CoordinateMapper Mapper
+    {
+        get
+        {
+            var g = GetSourceGeometry();
+            return g is null
+                ? new CoordinateMapper(DestRect, Math.Max(1, _capture?.Width ?? 1), Math.Max(1, _capture?.Height ?? 1))
+                : new CoordinateMapper(DestRect, g.Value.Width, g.Value.Height);
+        }
+    }
+
+    private void TrackPopups()
+    {
+        if (_display is null || _overlay is null) return;
+        bool popup = false;
+        try
+        {
+            foreach (var w in X11WindowEnumerator.List(_display))
+            {
+                if (w.WindowId == _source.WindowId) continue;
+                if (_source.Pid > 0 && w.Pid == _source.Pid)
+                {
+                    popup = true;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Emit($"popup scan error: {ex.Message}");
+            return;
+        }
+
+        if (popup == _popupHidden) return;
+        _popupHidden = popup;
+        ApplyVisibility();
+        Emit(popup ? "popup detected: overlay hidden" : "popup closed: overlay restored");
+    }
+
+    private void ApplyVisibility()
+    {
+        if (_overlay is null) return;
+        bool show = !_userHidden && !_popupHidden;
+        if (show) _overlay.Show();
+        else _overlay.Hide();
+    }
+
+    private void Cleanup()
+    {
+        try { _blitter?.Dispose(); } catch (Exception ex) { Emit($"dispose blitter: {ex.Message}"); }
+        try { _capture?.Dispose(); } catch (Exception ex) { Emit($"dispose capture: {ex.Message}"); }
+        try { _damage?.Dispose(); } catch (Exception ex) { Emit($"dispose damage: {ex.Message}"); }
+        try { _hotkey?.Dispose(); } catch (Exception ex) { Emit($"dispose hotkey: {ex.Message}"); }
+        try { _overlay?.Dispose(); } catch (Exception ex) { Emit($"dispose overlay: {ex.Message}"); }
+        try { _display?.Dispose(); } catch (Exception ex) { Emit($"dispose display: {ex.Message}"); }
+        _blitter = null; _capture = null; _damage = null; _hotkey = null; _overlay = null; _display = null;
+    }
+
+    private void Emit(string message)
+    {
+        Log.Write(message);
+        try { Message?.Invoke(message); } catch { }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Stop();
+        _started.Dispose();
+    }
+}

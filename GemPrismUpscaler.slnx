@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GemPrismUpscaler.Core/GemPrismUpscaler.Core.csproj" />
+    <Project Path="src/GemPrismUpscaler/GemPrismUpscaler.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GemPrismUpscaler.Tests/GemPrismUpscaler.Tests.csproj" />
+  </Folder>
+</Solution>

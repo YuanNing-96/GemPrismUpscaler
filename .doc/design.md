@@ -1,4 +1,4 @@
-# Kaleido 设计文档
+# 宝石棱镜 · GemPrismUpscaler 设计文档
 
 版本 0.1 · 对应 M0 规划
 
@@ -193,19 +193,23 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 
 这样模型永远工作在训练时的倍率上，不会因为非整数倍产生相位伪影。
 
-### 4.5 分数缩放的处理
+### 4.5 分数缩放与 overlay 尺寸
 
-KDE Plasma 在 150% 缩放下，XWayland 窗口的 pixmap 仍是逻辑尺寸（实测 1280×720 的窗口，pixmap 也是 1280×720），缩放发生在合成器阶段。
+本机实测（KWin 6.8.2 + XWayland 24.1.14，150% 缩放）：
 
-由此得出 M0 的呈现策略：
+- kscreen 的逻辑几何是 2560×1440，但 XWayland root 是 **3840×2160**；
+- 一个 320×180 的 X11 窗口在屏幕上也是 320×180，KWin **不会**在合成阶段把 XWayland 窗口整体放大；
+- `[Xwayland] Scale=1.5` 是让 X11 应用按 `Xft.dpi=144` 自己处理缩放；不处理 DPI 的原始 Xlib/Wine 窗口保持 1:1。
+
+因此 overlay 必须按 **X11 root 的物理尺寸**创建（本机 3840×2160），不能按 2560×1440。1280×720 源到 4K 是 **3×**：
 
 ```
-捕获 1280×720 → 超分 2× → 2560×1440 逻辑 overlay → 合成器 1.5× → 屏幕 3840×2160
+1280×720 --CNN 2×--> 2560×1440 --resample 1.5×--> 3840×2160
 ```
 
-**不要**按 4K 物理像素创建 X11 overlay：合成器会把它当作 5760×3240 的逻辑尺寸，直接超出屏幕。
+最后一步由我们做，不是合成器做；不存在“合成器线性放大导致软化”的问题，反而是物理像素 1:1。不要硬编码 2560×1440，用 `DisplayWidth/Height` 或 XRandR 当前 mode。100% 与 150% 都走同一套 root 尺寸逻辑。
 
-这个策略的额外好处是超分倍率正好 2.0，是 Anime4K 的原生工作点。代价是最后一跳由合成器做线性放大，会有轻微软化，M1 可用 Wayland layer-shell overlay 直接输出物理像素来消除。
+若以后把 KWin 切成“由系统缩放 XWayland”模式，行为会不同；需要重新实测并做运行时探测。M0 的前置条件是当前“X11 应用自己缩放”模式。
 
 ### 4.6 弹窗让位
 
@@ -213,7 +217,7 @@ KDE Plasma 在 150% 缩放下，XWayland 窗口的 pixmap 仍是逻辑尺寸（�
 
 三层防御：
 
-1. **监控**：在 root window 上监听 `SubstructureNotify`，捕获 `MapNotify` / `DestroyNotify` / `ConfigureNotify`，用 `_NET_WM_PID` 过滤出目标进程的所有顶层窗口
+1. **监控**：M0a 用 250ms 轮询 `_NET_CLIENT_LIST`，用 `_NET_WM_PID` 过滤出目标进程的所有顶层窗口；后续可换 `SubstructureNotify` 事件驱动，并用 XRes 补 `_NET_WM_PID` 缺失的情况
 2. **让位**：发现主窗口之外的新窗口被映射，立即隐藏覆盖窗口，弹窗关闭后延迟 200ms 恢复。不做"把覆盖窗口压到弹窗下面"的尝试，X11 堆叠顺序不可靠
 3. **兜底**：主窗口销毁 → 进程退出；焦点变化 → 隐藏；覆盖窗口进程崩溃 → watchdog 确保窗口被销毁
 
@@ -229,7 +233,7 @@ KDE Plasma 在 150% 缩放下，XWayland 窗口的 pixmap 仍是逻辑尺寸（�
 - 默认路径：GLSL 源码经 glslang 编译为 SPIR-V，全部在 Vulkan 中执行
 - 只有显式标记 `backend = "gl"` 且依赖 GL 特有能力的 pass 才走 GL
 
-M0 尝试实现混合路径；若在时间盒内无法稳定，降级为全 Vulkan，接口保持不变，后续补齐不返工。
+M0 保留混合路径作为时间盒实验（放在 M0a 闭环之后，建议 2 周）。关键前提：GL 必须与 Vulkan 跑在同一块 GPU 上。本机 XWayland GLX 在 AMD，而 Vulkan 在 NVIDIA，不能直接用 GLX；已验证用 **headless EGL surfaceless context**（NVIDIA）创建 GL 上下文并导出 DMA-BUF（`.agent/probe/egltest.c`）。Vulkan 侧导入与同步仍需 spike；若时间盒内不达标，降级为全 Vulkan，接口保持不变。
 
 **跨 API 的两条实现路径**：
 
@@ -244,19 +248,19 @@ M0 尝试实现混合路径；若在时间盒内无法稳定，降级为全 Vulk
 
 | 层 | 选型 | 理由 |
 |---|---|---|
-| 语言 | C# / .NET 9 | 跨平台、单文件分发、开发效率高 |
-| AOT | NativeAOT | 无运行时依赖，启动快 |
-| UI | Avalonia 12.1 | 原生 Wayland 后端已发布，可回退 X11 |
+| 语言 | C# / .NET 10 | 跨平台、单文件分发、开发效率高 |
+| AOT | 先 self-contained 单文件；NativeAOT 后议 | M0a 未验证 Avalonia/Silk.NET 的 AOT |
+| UI | Avalonia 12.1.4 + Avalonia.Wayland | 原生 Wayland 后端；无 Wayland 时回退 X11 |
 | Vulkan | Silk.NET.Vulkan | 需要 external memory 与 drm modifier，高层封装会挡路 |
-| OpenGL | Silk.NET.OpenGL | 混合管线需要 |
-| X11 | Silk.NET.X11 + 自写 P/Invoke | XComposite / XDamage / XShape 覆盖不全 |
-| Shader | GLSL，离线编译为 SPIR-V | 运行时不依赖 glslang |
-| 配置 | TOML | 手写友好 |
-| 原生辅助 | C++17 小库（可选） | 捕获热路径，必要时下沉 |
+| OpenGL | Silk.NET.OpenGL（M0b 混合实验） | 混合管线需要；用 headless EGL 在 NVIDIA |
+| X11 | 自写 P/Invoke（libX11/libXext/libXdamage） | Silk.NET.X11 覆盖不全；M0 不需要原生 C++ |
+| Shader | M0a 无 shader；M0b GLSL 离线编译为 SPIR-V | 运行时不依赖 glslang（用户自定义 shader 另议） |
+| 配置 | TOML | M1 接入；M0a 用 UI/CLI 参数 |
+| 原生辅助 | 无 | P/Invoke + Silk.NET 已够；去掉 CMake 依赖 |
 
 ### 5.1 关于 Avalonia 的 Wayland 支持
 
-Avalonia 12.1.0 起提供原生 Wayland 后端，但**没有自动回退**：显式调用 `UseWayland()` 后，在没有合成器的环境中会直接启动失败。正确写法是条件判断：
+Avalonia 12.1 提供原生 Wayland 后端（需引用 `Avalonia.Wayland` 包），但**没有自动回退**：显式调用 `UseWayland()` 后，在没有合成器的环境中会直接启动失败。正确写法是条件判断：
 
 ```csharp
 public static AppBuilder BuildAvaloniaApp()
@@ -285,42 +289,59 @@ public static AppBuilder BuildAvaloniaApp()
 
 ### 6.1 捕获（X11）
 
+M0a 实际路径：
+
 ```
-XCompositeRedirectWindow(自动重定向)
-  → XCompositeNameWindowPixmap 取 pixmap
-  → XDamage 监听脏区域
-  → 按脏矩形 XGetImage / XShmGetImage
-  → 上传为 GPU 纹理
+XShmGetImage(直接读 client window)
+  → XDamage 通知有变化
+  → 复制共享内存到 staging
+  → 上传 Vulkan image
 ```
 
 要点：
 
-- **必须**重定向，否则窗口被遮挡时捕获到的是垃圾数据
-- 窗口最小化时捕获会失败或返回陈旧帧，需要检测并暂停管线
-- 排除窗口边框：只取 client window，用 `_NET_FRAME_EXTENTS` 计算偏移
-- M0 用 XShm 回读（720p 约 3.7 MB/帧，开销 < 1 ms）；M1 换 DRI3 + DMA-BUF 零拷贝
+- KWin 合成会话里窗口已经被重定向，实测 `XShmGetImage` 直接读被遮挡窗口就能拿到窗口自己的内容；**不需要**先 `XCompositeRedirectWindow`。只有在无合成器的原生 X11 会话才需要重定向；若 RedirectWindow 返回 BadAccess 就跳过。
+- 窗口最小化时捕获可能返回陈旧帧；检测 `map_state` / `_NET_WM_STATE_HIDDEN` 后暂停。
+- 直接捕获 client window 本身就不含边框；`_NET_FRAME_EXTENTS` 只在需要把 client 坐标换算到 frame 坐标时使用。
+- XDamage 在 XWayland 下常报全窗口；M0a 用 Damage 做**帧级跳过**（无变化不捕获、不呈现），静止画面接近零开销。M1 若要按块重算，需要额外的分块哈希，不能直接依赖 Damage 矩形。
+- M0 用 XShm 回读（720p 约 3.7 MB/帧）；M1 换 DRI3 + DMA-BUF 零拷贝。
 
 ### 6.2 呈现（X11）
 
-- 创建 override-redirect 全屏窗口，`_NET_WM_STATE_ABOVE`
-- 逻辑尺寸 = 屏幕逻辑尺寸（150% 缩放下为 2560×1440）
-- `XShapeCombineRectangles` 把 input shape 置空，实现点击穿透
-- 不调用 `XSetInputFocus`，焦点始终留在游戏窗口
-- 隐藏光标：`XFixesHideCursor`
-- 用 Vulkan swapchain 或直接 present 到窗口
+- 创建 override-redirect 全屏窗口，尺寸取 **X11 root 物理尺寸**（本机 3840×2160）。
+- override-redirect 窗口不受 WM 管理，不需要 `_NET_WM_STATE_ABOVE`；实测可以直接盖住 EWMH 全屏窗口。
+- 不把 input shape 置空：overlay 要接收真实鼠标再转发（见 6.3）。
+- 不调用 `XSetInputFocus`；设置 `WM_HINTS.input=False`，焦点留在游戏窗口。
+- 不要用 `XFixesHideCursor`（这是整个 X server 级别）；M0a 保持系统光标。
+- 用 Vulkan swapchain（Xlib/XCB surface）呈现。M0a 用 `vkCmdBlitImage` 做线性重采样，不需要 shader/pipeline。
+- 覆盖任务栏/面板是预期行为；停止/退出/崩溃时必须销毁窗口。
 
 ### 6.3 输入
 
-- 点击穿透由 input shape 保证，**不需要**转发鼠标事件
-- 键盘同理，焦点在游戏窗口
-- 唯一需要转发的是热键：`XGrabKey` 在 root window 上抓取
-- 若某些游戏依赖 `XTest` 合成的相对移动，M1 再补
+**不能只靠点击穿透。** 1280×720 的游戏窗口 + 3840×2160 overlay：空 input shape 会把屏幕中央的点击透传到原游戏窗口之外，游戏收不到。
+
+M0a 做法：
+
+- overlay 的 input shape 保持完整，接收真实 `MotionNotify` / `ButtonPress` / `ButtonRelease`；
+- 用输出内容矩形（fit 时扣除黑边）反算源窗口客户区坐标；
+- 通过 `XSendEvent` 向源窗口发送 `MotionNotify`、`ButtonPress`、`ButtonRelease`、滚轮（Button4/5）；不移动真实指针；
+- 键盘不转发：overlay 不抢焦点，焦点留在游戏；
+- 热键 `Alt+Shift+A` 用 `XGrabKey` 在 root 上抓取；抓取失败要记录并回退 UI 按钮。
+
+XTest 在本机 XWayland 下受 KWin EIS 授权门控（会弹“允许操控输入设备”），且即使授权也要 warp 真实指针，不适合作为常规映射。XSendEvent 不需要权限框。
+
+M0 只支持视觉小说/2D 事件驱动输入；FPS/鼠标视角/raw input 不在范围内。
 
 ### 6.4 超分
 
-M0 内置：
+M0a 当前：
 
-- Anime4K `Upscale_CNN_x2_M` + `Clamp_Highlights`
+- Vulkan `vkCmdBlitImage` 双线性重采样到目标尺寸（无 shader/pipeline）
+- fit / stretch 两种几何；1280×720 → 3840×2160 实测约 60fps
+
+M0b 计划内置：
+
+- Anime4K `Upscale_CNN_x2_M` + `Clamp_Highlights`（需要把 mpv hook 格式展开成普通 GLSL/SPIR-V）
 - Lanczos 重采样（收尾用）
 - FSR1 EASU + RCAS
 
@@ -380,7 +401,7 @@ allow_windowed = true
 | 驱动 | NVIDIA 专有驱动，Vulkan 1.4 |
 | 显示 | 3840×2160，150% 系统缩放 |
 | 桌面 | KDE Plasma 6，Wayland 会话 |
-| 测试内容 | 1280×720 → 3840×2160 bilinear compute，300 帧 |
+| 测试内容 | 1280×720 → 3840×2160；M0a XShm + vkCmdBlitImage |
 
 ### 7.2 实测结果
 
@@ -404,18 +425,36 @@ allow_windowed = true
 - 脏矩形生效时的静止画面占用
 - 4K 输出下的呈现开销
 
+### 7.5 M0a 本机实测（2026-11-02）
+
+| 项 | 结果 |
+|---|---|
+| 合成测试窗口 | 1280×720，60fps 动画，X11 |
+| overlay | 3840×2160 override-redirect，XWayland root 物理尺寸 |
+| 捕获 | XShmGetImage 直读被遮挡窗口，无 XComposite 重定向 |
+| 呈现 | NVIDIA Vulkan + Xlib swapchain，`vkCmdBlitImage` |
+| 帧率 | 多次 10–20s 采样，57.9–61.7 fps；典型 59.9 fps |
+| 静止画面 | 首次捕获后 0 capture / 0 present，fps=0 |
+| 输入 | overlay (1920,1080) → 源窗口 (640,360)，测试窗口收到 ButtonPress/Release |
+| 弹窗 | 同 PID 顶层窗口出现后 overlay 隐藏，关闭后恢复 |
+| 未测 | 真实游戏、Anime4K、端到端光子延迟、4K 源、多显示器 |
+
+这些数字只证明“链路能跑、能到 60fps”，不等于 M0 最终验收；真实游戏（腐姬 / 秽翼的尤斯蒂娅）仍需用户验证。
+
 ---
 
 ## 8. 风险与未决问题
 
 | 风险 | 影响 | 应对 |
 |---|---|---|
-| 独占全屏窗口压不住 | 覆盖窗口无法置顶 | M0 要求窗口化运行；后续研究 override-redirect 全屏的兼容 |
-| 弹窗检测误判 | 频繁让位，体验抖动 | 加防抖窗口（200 ms）与白名单 |
-| 分数缩放下的坐标换算 | 位置偏移 | M0 用实测的 pixmap 尺寸推导，不依赖 `_XWAYLAND_GLOBAL_OUTPUT_SCALE` |
-| 原生 Wayland 无法注入输入 | 只能靠"对输入透明" | layer-shell + 空 input region + `keyboard_interactivity=none` |
-| 色彩空间 | 画面发灰或偏亮 | M0 假设 sRGB 直通，M1 加 linear 工作空间选项 |
-| 多 GPU | DMA-BUF 跨设备拷贝 | M0 锁定独显，强制设备选择 |
+| 独占全屏窗口压不住 | 覆盖窗口无法置顶 | 本机实测 override-redirect 可盖住 EWMH 全屏窗口；独占 D3D 全屏仍需真实游戏验证 |
+| 弹窗检测误判 | 频繁让位，体验抖动 | 250ms 轮询 + 200ms 防抖；后续补 XRes/`WM_TRANSIENT_FOR` |
+| 分数缩放下的坐标换算 | 位置偏移 | M0 实测 XWayland 1:1；overlay 用 root 物理尺寸，不依赖逻辑 2560×1440 |
+| 鼠标转发对 raw input 无效 | FPS/鼠标视角游戏不工作 | M0 只支持视觉小说/2D；raw input 需要另一套输入方案 |
+| 色彩空间 | 画面发灰或偏亮 | M0 测试关闭 HDR、假设 sRGB 直通；M1 加 linear 选项 |
+| 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | M0a 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出 |
+| XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |
+| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限 |
 
 ### 未决问题
 

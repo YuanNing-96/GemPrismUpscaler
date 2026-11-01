@@ -1,0 +1,15 @@
+GemPrismUpscaler（宝石棱镜）
+Copyright (C) 2026
+
+本项目的架构与几何模型参考了 Magpie（https://github.com/Blinue/Magpie，GPL-3.0）。
+超分算法与着色器计划来自 Anime4K（https://github.com/bloc97/Anime4K，MIT）。
+FSR 着色器计划来自 AMD FidelityFX（MIT）。
+
+第三方依赖：
+- Avalonia / Avalonia.Wayland：MIT
+- Silk.NET：MIT
+- .NET：MIT
+- Anime4K：MIT
+- Magpie：GPL-3.0（仅参考设计，未复制代码）
+
+本发行版以 GPL-3.0-or-later 发布；若后续包含 GPL-3.0 代码，整体仍为 GPL-3.0。
