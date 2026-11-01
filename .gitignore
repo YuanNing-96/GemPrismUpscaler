@@ -1,0 +1,92 @@
+# =========================
+# .NET / 构建产物
+# =========================
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+publish/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# 发布输出（自包含单文件等）
+publish/
+[Bb]uild/
+[Oo]ut/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+.nuget/
+*.nuget.props
+*.nuget.targets
+
+# =========================
+# Avalonia
+# =========================
+# XAML 编译缓存
+*.axaml.g.cs
+*.xaml.g.cs
+*.g.cs
+*.g.i.cs
+
+# Avalonia DevTools / 诊断
+*.avalonia.tmp
+
+# =========================
+# IDE / 编辑器
+# =========================
+# Visual Studio
+.vs/
+*.vsidx
+*.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# VSCode
+.vscode-test/
+
+# =========================
+# 操作系统
+# =========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =========================
+# 日志 / 临时文件
+# =========================
+*.log
+*.tmp
+*.bak
+*.cache
+*.swp
+*~
+
+# =========================
+# 测试覆盖率
+# =========================
+[Tt]est[Rr]esult*/
+coverage/
+*.coverage
+*.coveragexml
+
+# =========================
+# agent输出的临时文档区，便于开发
+# =========================
+.agent
