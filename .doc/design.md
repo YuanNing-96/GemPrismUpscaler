@@ -225,6 +225,8 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 
 实测跨 API 交接开销约 0.13 ms/次（见第 7 节），性能不是障碍。但工程复杂度是真实成本。
 
+**M0 决策（2026-11-02）**：M0 不做混合管线，效果全部在 Vulkan 中执行（Anime4K S 5 pass + Lanczos-2）；保留 `EffectMode`/后续 backend 扩展点，M2 再评估 GL 路径。下面的策略作为 M2 的设计背景保留。
+
 **策略**：
 
 - `FrameHandle` 抽象为"Vulkan image"或"GL texture + fd"二选一
@@ -233,7 +235,7 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 - 默认路径：GLSL 源码经 glslang 编译为 SPIR-V，全部在 Vulkan 中执行
 - 只有显式标记 `backend = "gl"` 且依赖 GL 特有能力的 pass 才走 GL
 
-M0 保留混合路径作为时间盒实验（放在 M0a 闭环之后，建议 2 周）。关键前提：GL 必须与 Vulkan 跑在同一块 GPU 上。本机 XWayland GLX 在 AMD，而 Vulkan 在 NVIDIA，不能直接用 GLX；已验证用 **headless EGL surfaceless context**（NVIDIA）创建 GL 上下文并导出 DMA-BUF（`.agent/probe/egltest.c`）。Vulkan 侧导入与同步仍需 spike；若时间盒内不达标，降级为全 Vulkan，接口保持不变。
+原计划在 M0a 闭环后做 2 周混合路径时间盒实验；**该实验未执行**，M0 直接采用全 Vulkan。以下前提/路径仅作为 M2 的参考。关键前提：GL 必须与 Vulkan 跑在同一块 GPU 上。本机 XWayland GLX 在 AMD，而 Vulkan 在 NVIDIA，不能直接用 GLX；已验证用 **headless EGL surfaceless context**（NVIDIA）创建 GL 上下文并导出 DMA-BUF（`.agent/probe/egltest.c`）。Vulkan 侧导入与同步仍需 spike；若时间盒内不达标，降级为全 Vulkan，接口保持不变。
 
 **跨 API 的两条实现路径**：
 
