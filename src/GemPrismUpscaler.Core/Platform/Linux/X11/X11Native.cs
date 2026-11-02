@@ -25,6 +25,7 @@ internal static unsafe class X11Native
     public const long ExposureMask = 1L << 15;
     public const long StructureNotifyMask = 1L << 17;
     public const long SubstructureNotifyMask = 1L << 19;
+    public const long SubstructureRedirectMask = 1L << 20;
 
     public const long CWBackPixel = 1L << 1;
     public const long CWOverrideRedirect = 1L << 9;
@@ -38,6 +39,13 @@ internal static unsafe class X11Native
     public const int GrabModeAsync = 1;
     public const int InputHint = 1;
     public const int XDamageReportNonEmpty = 3;
+
+    public const int RevertToParent = 2;
+    public const int NotifyNormal = 0;
+    public const int NotifyNonlinear = 3;
+    public const int EnterNotify = 7;
+    public const int LeaveNotify = 8;
+    public const int ClientMessage = 33;
 
     public const ulong XK_A = 0x0061;
     public const ulong XK_Escape = 0xFF1B;
@@ -75,6 +83,73 @@ internal static unsafe class X11Native
         public uint State;
         public uint Detail; // keycode, button, or is_hint
         public int SameScreen;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 192)]
+    public struct XClientMessageEvent
+    {
+        public int Type;
+        public ulong Serial;
+        public int SendEvent;
+        public IntPtr Display;
+        public ulong Window;
+        public ulong MessageType;
+        public int Format;
+        public long Data0;
+        public long Data1;
+        public long Data2;
+        public long Data3;
+        public long Data4;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 192)]
+    public struct XCrossingEvent
+    {
+        public int Type;
+        public ulong Serial;
+        public int SendEvent;
+        public IntPtr Display;
+        public ulong Window;
+        public ulong Root;
+        public ulong Subwindow;
+        public ulong Time;
+        public int X;
+        public int Y;
+        public int XRoot;
+        public int YRoot;
+        public int Mode;
+        public int Detail;
+        public int SameScreen;
+        public int Focus;
+        public uint State;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XWindowAttributes
+    {
+        public int X;
+        public int Y;
+        public int Width;
+        public int Height;
+        public int BorderWidth;
+        public int Depth;
+        public IntPtr Visual;
+        public ulong Root;
+        public int Class;
+        public int BitGravity;
+        public int WinGravity;
+        public int BackingStore;
+        public ulong BackingPlanes;
+        public ulong BackingPixel;
+        public int SaveUnder;
+        public IntPtr Colormap;
+        public int MapInstalled;
+        public int MapState;
+        public long AllEventMasks;
+        public long YourEventMask;
+        public long DoNotPropagateMask;
+        public int OverrideRedirect;
+        public IntPtr Screen;
     }
 
     [StructLayout(LayoutKind.Sequential, Size = 192)]
@@ -171,6 +246,8 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XFree(IntPtr data);
     [DllImport(X11)] public static extern int XGetGeometry(IntPtr display, ulong drawable, out ulong root, out int x, out int y,
         out uint width, out uint height, out uint borderWidth, out uint depth);
+    [DllImport(X11)] public static extern int XGetWindowAttributes(IntPtr display, ulong window, out XWindowAttributes attributes);
+    [DllImport(X11)] public static extern int XSetInputFocus(IntPtr display, ulong focus, int revertTo, ulong time);
     [DllImport(X11)] public static extern int XTranslateCoordinates(IntPtr display, ulong src, ulong dst, int srcX, int srcY,
         out int dstX, out int dstY, out ulong child);
     [DllImport(X11)] public static extern int XQueryTree(IntPtr display, ulong window, out ulong root, out ulong parent, out IntPtr children, out uint nchildren);
@@ -192,6 +269,8 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XNextEvent(IntPtr display, ref XEvent xevent);
     [DllImport(X11)] public static extern IntPtr XSetErrorHandler(XErrorHandler handler);
     [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XEvent xevent);
+    [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XCrossingEvent xevent);
+    [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XClientMessageEvent xevent);
     [DllImport(X11)] public static extern int XGrabKey(IntPtr display, int keycode, uint modifiers, ulong grabWindow, int ownerEvents,
         int pointerMode, int keyboardMode);
     [DllImport(X11)] public static extern int XUngrabKey(IntPtr display, int keycode, uint modifiers, ulong grabWindow);

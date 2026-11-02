@@ -9,13 +9,24 @@ namespace GemPrismUpscaler.Core.Engine;
 /// M0a engine: capture a source X11 window, present a full-screen Vulkan overlay,
 /// forward pointer input, and hide for popup windows of the same process.
 /// Frame-driven: static source content does not cause repeated captures/presents.
+///
+/// Visibility is a small state machine (see <see cref="OverlayVisibility"/>):
+/// - Alt+Shift+A toggles the overlay;
+/// - a same-process dialog hides it;
+/// - a minimized/unmapped source hides it;
+/// - losing input focus hides it, so switching to another app reveals the desktop;
+/// - a closed source stops the engine so the UI can reset.
+/// Every transition back to visible forces one fresh capture+present, because the
+/// Vulkan/X11 surface contents are undefined after an unmap.
 /// </summary>
 public sealed class UpscaleSession : IDisposable
 {
+    private const int PollIntervalMs = 200;
+
     private readonly WindowInfo _source;
     private readonly ScalingMode _mode;
     private readonly ManualResetEventSlim _started = new(false);
-    private readonly object _gate = new();
+    private readonly OverlayVisibility _visibility = new();
     private Thread? _thread;
     private X11Display? _display;
     private X11Overlay? _overlay;
@@ -25,12 +36,13 @@ public sealed class UpscaleSession : IDisposable
     private X11Hotkey? _hotkey;
     private VulkanBlitter? _blitter;
     private volatile bool _stop;
-    private volatile bool _userHidden;
-    private bool _popupHidden;
     private bool _disposed;
     private Exception? _initError;
+    private bool _focusedOnce;
+    private bool _forceRedraw = true;
     private int _screenWidth;
     private int _screenHeight;
+    private string _exitReason = string.Empty;
 
     public event Action<string>? Message;
 
@@ -38,6 +50,13 @@ public sealed class UpscaleSession : IDisposable
     public ulong OverlayWindowId => _overlay?.Window ?? 0;
     public bool IsRunning => _thread is { IsAlive: true };
     public string OverlayTitle => "GemPrismOverlay";
+    public string ExitReason => Volatile.Read(ref _exitReason);
+
+    /// <summary>
+    /// Hide the overlay when the source window loses input focus (and restore it
+    /// when focus returns). Enabled by default; the source is focused on start.
+    /// </summary>
+    public bool FollowFocus { get; set; } = true;
 
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit)
     {
@@ -75,7 +94,7 @@ public sealed class UpscaleSession : IDisposable
         catch (Exception ex)
         {
             _initError ??= ex;
-            Emit($"engine error: {ex.GetType().Name}: {ex.Message}");
+            SetExitReason($"engine error: {ex.GetType().Name}: {ex.Message}");
             _started.Set();
         }
         finally
@@ -102,10 +121,22 @@ public sealed class UpscaleSession : IDisposable
         _hotkey = new X11Hotkey(_display);
         _blitter = new VulkanBlitter(_display, _overlay.Window, _screenWidth, _screenHeight);
 
+        // Starting the upscaler from the config UI leaves focus on our window.
+        // Give it back to the game so keyboard/hover/activation work immediately.
+        // Do not force-activate a minimized game just because it was selected.
+        var initialState = X11WindowProbe.GetState(_display, _source.WindowId);
+        if (initialState.Viewable && !initialState.Hidden)
+        {
+            FocusSource();
+            for (int i = 0; i < 10 && !X11WindowProbe.IsFocused(_display, _source.WindowId); i++)
+                Thread.Sleep(20);
+        }
+        _focusedOnce = X11WindowProbe.IsFocused(_display, _source.WindowId);
+
         Emit($"engine started source=0x{_source.WindowId:x} '{_source.Title}' {geometry.Value.Width}x{geometry.Value.Height} " +
              $"screen={_screenWidth}x{_screenHeight} dest={DestRect} device='{_blitter.DeviceName}' " +
-             $"format={_blitter.SwapchainFormatName} extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} damage={_damage.Available} hotkey={_hotkey.IsGrabbed} " +
-             $"overlay=0x{_overlay.Window:x}");
+             $"format={_blitter.SwapchainFormatName} extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} " +
+             $"damage={_damage.Available} hotkey={_hotkey.IsGrabbed} focus={_focusedOnce} overlay=0x{_overlay.Window:x}");
     }
 
     private (int Width, int Height)? GetSourceGeometry()
@@ -121,7 +152,7 @@ public sealed class UpscaleSession : IDisposable
     private void Loop()
     {
         bool dirty = true;
-        long lastPopupCheck = 0;
+        long lastPoll = 0;
         long lastFallback = 0;
         int captureFailures = 0;
         var stats = new FrameStats();
@@ -134,12 +165,22 @@ public sealed class UpscaleSession : IDisposable
                 break;
 
             long now = Environment.TickCount64;
-            if (_source.Pid > 0 && now - lastPopupCheck >= 250)
+            if (now - lastPoll >= PollIntervalMs)
             {
-                lastPopupCheck = now;
+                lastPoll = now;
+                if (!PollSource())
+                    break;
                 TrackPopups();
             }
 
+            if (_forceRedraw)
+            {
+                _forceRedraw = false;
+                dirty = true;
+            }
+
+            // Do not capture while the overlay is hidden; keep polling above so a
+            // minimized/closed source is still noticed.
             if (!_overlay.IsVisible)
             {
                 dirty = false;
@@ -160,7 +201,7 @@ public sealed class UpscaleSession : IDisposable
                 var geom = GetSourceGeometry();
                 if (geom is null)
                 {
-                    Emit("source window closed");
+                    SetExitReason("source window closed");
                     break;
                 }
                 if (geom.Value.Width != _capture.Width || geom.Value.Height != _capture.Height)
@@ -176,7 +217,7 @@ public sealed class UpscaleSession : IDisposable
                     captureFailures++;
                     if (captureFailures > 30)
                     {
-                        Emit("capture failed repeatedly; stopping");
+                        SetExitReason("capture failed repeatedly (source may be closed)");
                         break;
                     }
                 }
@@ -191,7 +232,7 @@ public sealed class UpscaleSession : IDisposable
                     }
                     catch (Exception ex)
                     {
-                        Emit($"present error: {ex.GetType().Name}: {ex.Message}");
+                        SetExitReason($"present error: {ex.GetType().Name}: {ex.Message}");
                         break;
                     }
                 }
@@ -199,12 +240,12 @@ public sealed class UpscaleSession : IDisposable
 
             var report = stats.Tick();
             if (report is not null)
-                Emit($"stats {report} hidden={_overlay.IsVisible == false} popup={_popupHidden} userHidden={_userHidden}");
+                Emit($"stats {report} hidden={_overlay.IsVisible == false} popup={_visibility.PopupHidden} userHidden={_visibility.UserHidden}");
 
             Thread.Sleep(2);
         }
 
-        Emit("engine loop exited");
+        Emit($"engine loop exited ({_visibility.ReasonText})");
     }
 
     private void ProcessEvents(ref bool dirty)
@@ -224,10 +265,17 @@ public sealed class UpscaleSession : IDisposable
 
             if (_hotkey is not null && _hotkey.IsHotkey(ev))
             {
-                _userHidden = !_userHidden;
+                _visibility.UserHidden = !_visibility.UserHidden;
+                if (!_visibility.UserHidden)
+                {
+                    // Showing via hotkey should also make the game usable again.
+                    FocusSource();
+                    _visibility.FocusLost = false;
+                    _focusedOnce = true;
+                }
                 ApplyVisibility();
                 dirty = true;
-                Emit(_userHidden ? "hotkey: overlay hidden" : "hotkey: overlay shown");
+                Emit(_visibility.UserHidden ? "hotkey: overlay hidden" : "hotkey: overlay shown");
                 continue;
             }
 
@@ -237,6 +285,12 @@ public sealed class UpscaleSession : IDisposable
             switch (ev.Type)
             {
                 case 4: // ButtonPress
+                    if (!X11WindowProbe.IsFocused(_display, _source.WindowId))
+                    {
+                        FocusSource();
+                        _visibility.FocusLost = false;
+                        _focusedOnce = true;
+                    }
                     if (ev.Detail == 4 || ev.Detail == 5)
                         _input.ForwardWheel((int)ev.X, (int)ev.Y, Mapper, ev.Detail == 4);
                     else
@@ -264,20 +318,71 @@ public sealed class UpscaleSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Checks that the source window still exists and is viewable, and tracks
+    /// focus/minimize transitions. Returns false when the source is gone.
+    /// </summary>
+    private bool PollSource()
+    {
+        if (_display is null) return false;
+
+        var state = X11WindowProbe.GetState(_display, _source.WindowId);
+        if (!state.Exists)
+        {
+            SetExitReason("game window closed");
+            return false;
+        }
+
+        bool suspended = !state.Viewable || state.Hidden;
+        bool resumed = _visibility.SourceSuspended && !suspended;
+        _visibility.SourceSuspended = suspended;
+
+        if (FollowFocus)
+        {
+            // Focus on our own overlay (e.g. after a click) is not a "switch to
+            // another app" and must not make the overlay hide itself.
+            bool focused = X11WindowProbe.IsFocused(_display, _source.WindowId) ||
+                           (_overlay is not null && X11WindowProbe.IsFocused(_display, _overlay.Window));
+            if (focused)
+            {
+                _focusedOnce = true;
+                _visibility.FocusLost = false;
+            }
+            else if (_focusedOnce)
+            {
+                _visibility.FocusLost = true;
+            }
+        }
+
+        if (resumed)
+        {
+            _forceRedraw = true;
+            Emit("source viewable again: overlay resumed");
+        }
+
+        ApplyVisibility();
+        return true;
+    }
+
     private void TrackPopups()
     {
         if (_display is null || _overlay is null) return;
+        if (_source.Pid <= 0) return;
+
         bool popup = false;
         try
         {
             foreach (var w in X11WindowEnumerator.List(_display))
             {
                 if (w.WindowId == _source.WindowId) continue;
-                if (_source.Pid > 0 && w.Pid == _source.Pid)
-                {
-                    popup = true;
-                    break;
-                }
+                if (w.Pid != _source.Pid) continue;
+                // A minimized/unmapped dialog must not keep the overlay hidden.
+                var state = X11WindowProbe.GetState(_display, w.WindowId);
+                if (!state.Exists || !state.Viewable || state.Hidden) continue;
+                // Ignore tiny helper/IME windows that Wine creates alongside the game.
+                if (w.Width < 64 || w.Height < 64) continue;
+                popup = true;
+                break;
             }
         }
         catch (Exception ex)
@@ -286,8 +391,9 @@ public sealed class UpscaleSession : IDisposable
             return;
         }
 
-        if (popup == _popupHidden) return;
-        _popupHidden = popup;
+        if (popup == _visibility.PopupHidden) return;
+        _visibility.PopupHidden = popup;
+        if (!popup) _forceRedraw = true; // surface was unmapped; never come back black
         ApplyVisibility();
         Emit(popup ? "popup detected: overlay hidden" : "popup closed: overlay restored");
     }
@@ -295,9 +401,55 @@ public sealed class UpscaleSession : IDisposable
     private void ApplyVisibility()
     {
         if (_overlay is null) return;
-        bool show = !_userHidden && !_popupHidden;
-        if (show) _overlay.Show();
-        else _overlay.Hide();
+
+        bool show = _visibility.IsVisible;
+        if (show == _overlay.IsVisible) return;
+
+        if (show)
+        {
+            _forceRedraw = true;
+            _overlay.Show();
+            SyncPointerToSource();
+            Emit("overlay shown");
+        }
+        else
+        {
+            _overlay.Hide();
+            _input?.Reset();
+            Emit($"overlay hidden ({_visibility.ReasonText})");
+        }
+    }
+
+    /// <summary>
+    /// Pushes the current pointer position into the source window right after the
+    /// overlay appears, so hover state is correct before the user moves the mouse.
+    /// </summary>
+    private void SyncPointerToSource()
+    {
+        if (_display is null || _input is null) return;
+        if (X11Native.XQueryPointer(_display.Handle, _display.Root, out _, out _,
+                out int rootX, out int rootY, out _, out _, out _) == 0)
+            return;
+        _input.ForwardMotion(rootX, rootY, Mapper);
+    }
+
+    /// <summary>
+    /// Asks the compositor to focus the source window. EWMH activation is needed
+    /// because KWin's focus-stealing prevention ignores a bare XSetInputFocus from
+    /// a background client (the config UI has focus when the session starts).
+    /// </summary>
+    private void FocusSource()
+    {
+        if (_display is null) return;
+        X11WindowProbe.Activate(_display, _source.WindowId);
+        X11Native.XSetInputFocus(_display.Handle, _source.WindowId, X11Native.RevertToParent, 0);
+        _display.Sync();
+    }
+
+    private void SetExitReason(string reason)
+    {
+        Volatile.Write(ref _exitReason, reason);
+        Emit($"stopping: {reason}");
     }
 
     private void Cleanup()

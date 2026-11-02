@@ -36,12 +36,15 @@ sealed class Program
                 return 0;
             }
 
-            if (args.Length < 2) { Console.Error.WriteLine("usage: --window <id> [--stretch]"); return 2; }
+            if (args.Length < 2) { Console.Error.WriteLine("usage: --window <id> [--stretch] [--no-follow-focus]"); return 2; }
             ulong id = ParseId(args[1]);
             var info = X11WindowEnumerator.List(display).FirstOrDefault(w => w.WindowId == id);
             if (info is null) { Console.Error.WriteLine($"window 0x{id:x} not found"); return 3; }
             var mode = args.Any(a => a == "--stretch") ? ScalingMode.Stretch : ScalingMode.Fit;
-            using var session = new UpscaleSession(info, mode);
+            using var session = new UpscaleSession(info, mode)
+            {
+                FollowFocus = !args.Any(a => a == "--no-follow-focus")
+            };
             session.Message += m => Console.WriteLine(m);
             session.Start();
             Console.WriteLine($"running; overlay=0x{session.OverlayWindowId:x}; Ctrl+C to stop");

@@ -9,6 +9,7 @@
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,10,0,6">
             <Button x:Name="RefreshButton" Content="刷新窗口"/>
             <CheckBox x:Name="StretchCheck" Content="拉伸填满（默认保持比例）" VerticalAlignment="Center"/>
+            <CheckBox x:Name="FollowFocusCheck" Content="跟随焦点（切到其他程序时收起）" IsChecked="True" VerticalAlignment="Center"/>
             <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="#666" Text="就绪"/>
         </StackPanel>
         <ListBox Grid.Row="2" x:Name="WindowList" Margin="0,4"/>

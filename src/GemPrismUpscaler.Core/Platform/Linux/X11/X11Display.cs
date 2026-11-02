@@ -22,6 +22,8 @@ public sealed class X11Display : IDisposable
     public ulong AtomWmClass { get; }
     public ulong AtomUtf8String { get; }
     public ulong AtomNetWmState { get; }
+    public ulong AtomNetWmStateHidden { get; }
+    public ulong AtomNetActiveWindow { get; }
 
     public X11Display(string? name = null)
     {
@@ -42,6 +44,8 @@ public sealed class X11Display : IDisposable
         AtomWmClass = X11Native.XInternAtom(Handle, "WM_CLASS", 0);
         AtomUtf8String = X11Native.XInternAtom(Handle, "UTF8_STRING", 0);
         AtomNetWmState = X11Native.XInternAtom(Handle, "_NET_WM_STATE", 0);
+        AtomNetWmStateHidden = X11Native.XInternAtom(Handle, "_NET_WM_STATE_HIDDEN", 0);
+        AtomNetActiveWindow = X11Native.XInternAtom(Handle, "_NET_ACTIVE_WINDOW", 0);
     }
 
     public static int LastError => Volatile.Read(ref _lastError);

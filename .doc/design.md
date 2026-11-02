@@ -217,9 +217,9 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 
 三层防御：
 
-1. **监控**：M0a 用 250ms 轮询 `_NET_CLIENT_LIST`，用 `_NET_WM_PID` 过滤出目标进程的所有顶层窗口；后续可换 `SubstructureNotify` 事件驱动，并用 XRes 补 `_NET_WM_PID` 缺失的情况
-2. **让位**：发现主窗口之外的新窗口被映射，立即隐藏覆盖窗口，弹窗关闭后延迟 200ms 恢复。不做"把覆盖窗口压到弹窗下面"的尝试，X11 堆叠顺序不可靠
-3. **兜底**：主窗口销毁 → 进程退出；焦点变化 → 隐藏；覆盖窗口进程崩溃 → watchdog 确保窗口被销毁
+1. **监控**：M0a 用 200ms 轮询 `_NET_CLIENT_LIST`，用 `_NET_WM_PID` 过滤出目标进程的所有顶层窗口；只把**当前 viewable 且非 `_NET_WM_STATE_HIDDEN`、尺寸 ≥64×64** 的同 PID 窗口算作弹窗，避免被 Wine 的隐藏 helper/IME 窗口永久误判。后续可换 `SubstructureNotify` 事件驱动，并用 XRes 补 `_NET_WM_PID` 缺失的情况
+2. **让位**：发现弹窗，立即隐藏覆盖窗口；弹窗关闭后恢复。恢复时必须强制重新捕获+呈现一次，因为 X11 窗口 unmap 后 Vulkan surface 的内容未定义，否则会黑屏到下一次画面变化。不做"把覆盖窗口压到弹窗下面"的尝试，X11 堆叠顺序不可靠
+3. **兜底**：主窗口销毁 → 引擎停止并销毁覆盖窗口；主窗口最小化/unmap → 覆盖窗口隐藏，恢复后重新捕获；焦点变化 → 隐藏（见 6.2）；覆盖窗口进程崩溃 → watchdog 确保窗口被销毁
 
 ### 4.7 混合管线：接口先行，实现分期
 
@@ -311,7 +311,9 @@ XShmGetImage(直接读 client window)
 - 创建 override-redirect 全屏窗口，尺寸取 **X11 root 物理尺寸**（本机 3840×2160）。
 - override-redirect 窗口不受 WM 管理，不需要 `_NET_WM_STATE_ABOVE`；实测可以直接盖住 EWMH 全屏窗口。
 - 不把 input shape 置空：overlay 要接收真实鼠标再转发（见 6.3）。
-- 不调用 `XSetInputFocus`；设置 `WM_HINTS.input=False`，焦点留在游戏窗口。
+- 不把输入焦点留在配置界面：启动会话、热键重新显示、点击覆盖窗口时，通过 EWMH `_NET_ACTIVE_WINDOW`（source indication=2）+ `XSetInputFocus` 把焦点交还游戏。只调 `XSetInputFocus` 会被 KWin 的焦点窃取防护忽略（实测）。
+- 设置 `WM_HINTS.input=False`，overlay 自身不参与焦点；`FollowFocus` 默认开启：游戏失去焦点时收起覆盖窗口，回到游戏时恢复。配置界面提供开关，CLI 用 `--no-follow-focus` 关闭。
+- 每次重新显示都重新捕获并呈现一帧（unmap 后 surface 内容未定义）；显示时把当前真实指针位置同步给游戏一次，避免悬停状态停留在旧位置。
 - 不要用 `XFixesHideCursor`（这是整个 X server 级别）；M0a 保持系统光标。
 - 用 Vulkan swapchain（Xlib/XCB surface）呈现。M0a 用 `vkCmdBlitImage` 做线性重采样，不需要 shader/pipeline。
 - 覆盖任务栏/面板是预期行为；停止/退出/崩溃时必须销毁窗口。
@@ -325,7 +327,8 @@ M0a 做法：
 - overlay 的 input shape 保持完整，接收真实 `MotionNotify` / `ButtonPress` / `ButtonRelease`；
 - 用输出内容矩形（fit 时扣除黑边）反算源窗口客户区坐标；
 - 通过 `XSendEvent` 向源窗口发送 `MotionNotify`、`ButtonPress`、`ButtonRelease`、滚轮（Button4/5）；不移动真实指针；
-- 键盘不转发：overlay 不抢焦点，焦点留在游戏；
+- 指针进入/离开内容矩形时补发合成 `EnterNotify` / `LeaveNotify`（`NotifyNormal` / `NotifyNonlinear`）：overlay map 会让真实指针“离开”源窗口，部分引擎/工具包只靠 crossing 事件维护悬停状态；拖拽在内容矩形外松手时仍补发 release，避免按键卡住；
+- 键盘不转发：焦点由 6.2 的激活逻辑交还游戏，按键直接到游戏；
 - 热键 `Alt+Shift+A` 用 `XGrabKey` 在 root 上抓取；抓取失败要记录并回退 UI 按钮。
 
 XTest 在本机 XWayland 下受 KWin EIS 授权门控（会弹“允许操控输入设备”），且即使授权也要 warp 真实指针，不适合作为常规映射。XSendEvent 不需要权限框。
@@ -448,9 +451,10 @@ allow_windowed = true
 | 风险 | 影响 | 应对 |
 |---|---|---|
 | 独占全屏窗口压不住 | 覆盖窗口无法置顶 | 本机实测 override-redirect 可盖住 EWMH 全屏窗口；独占 D3D 全屏仍需真实游戏验证 |
-| 弹窗检测误判 | 频繁让位，体验抖动 | 250ms 轮询 + 200ms 防抖；后续补 XRes/`WM_TRANSIENT_FOR` |
+| 弹窗检测误判 | 频繁让位，体验抖动 | 200ms 轮询 + viewable/尺寸过滤；后续补 XRes/`WM_TRANSIENT_FOR` |
 | 分数缩放下的坐标换算 | 位置偏移 | M0 实测 XWayland 1:1；overlay 用 root 物理尺寸，不依赖逻辑 2560×1440 |
 | 鼠标转发对 raw input 无效 | FPS/鼠标视角游戏不工作 | M0 只支持视觉小说/2D；raw input 需要另一套输入方案 |
+| 轮询 `GetCursorPos`/DirectInput 的游戏看不到合成指针 | 悬停高亮可能仍不触发（点击/滚轮正常） | 合成事件只能更新 X/Wine 的消息队列，真实指针仍在 overlay 上；除非 warp 真实指针或引入虚拟输入设备/合成器方案（M2），M0 不承诺这类悬停 |
 | 色彩空间 | 画面发灰或偏亮 | M0 测试关闭 HDR、假设 sRGB 直通；M1 加 linear 选项 |
 | 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | M0a 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出 |
 | XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |

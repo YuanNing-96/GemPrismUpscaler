@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         {
             using var display = new X11Display();
             _windows = X11WindowEnumerator.List(display)
+                .Where(w => w.Pid != Environment.ProcessId)
                 .OrderByDescending(w => w.Width * w.Height)
                 .ToList();
             WindowList.ItemsSource = _windows;
@@ -61,7 +62,10 @@ public partial class MainWindow : Window
 
         StopSession();
         var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
-        var session = new UpscaleSession(info, mode);
+        var session = new UpscaleSession(info, mode)
+        {
+            FollowFocus = FollowFocusCheck.IsChecked != false
+        };
         session.Message += OnSessionMessage;
         try
         {
@@ -80,7 +84,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void StopSession()
+    private void StopSession(string? status = null)
     {
         var session = _session;
         _session = null;
@@ -92,13 +96,26 @@ public partial class MainWindow : Window
         }
         StartButton.IsEnabled = true;
         StopButton.IsEnabled = false;
-        if (StatusText is not null) StatusText.Text = "已停止";
+        if (StatusText is not null) StatusText.Text = status ?? "已停止";
     }
 
     private void WatchSession()
     {
-        if (_session is null || _session.IsRunning) return;
-        StopSession();
+        var session = _session;
+        if (session is null || session.IsRunning) return;
+
+        // The engine stops itself when the game window disappears. Surface the
+        // reason instead of leaving the UI in "running" state.
+        string reason = session.ExitReason;
+        StopSession(string.IsNullOrWhiteSpace(reason) ? "已停止" : $"已停止：{ChineseReason(reason)}");
+    }
+
+    private static string ChineseReason(string reason)
+    {
+        if (reason.Contains("game window closed", StringComparison.Ordinal)) return "游戏窗口已关闭";
+        if (reason.Contains("source window closed", StringComparison.Ordinal)) return "游戏窗口已关闭";
+        if (reason.Contains("capture failed", StringComparison.Ordinal)) return "捕获失败，游戏可能已关闭";
+        return reason;
     }
 
     private void OnSessionMessage(string message)

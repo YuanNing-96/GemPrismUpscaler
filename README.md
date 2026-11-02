@@ -15,14 +15,16 @@
 | 3840×2160 override-redirect 全屏 overlay | ✅ |
 | NVIDIA Vulkan 呈现（vkCmdBlitImage） | ✅ |
 | 鼠标坐标映射 + `XSendEvent` 转发 | ✅ |
-| 键盘焦点保持在游戏 | ✅ |
+| 启动/恢复时把键盘焦点交还游戏（EWMH 激活） | ✅ |
+| 焦点跟随：切到其他程序自动收起 | ✅ |
 | `Alt+Shift+A` 显示/隐藏 | ✅ |
-| 弹窗检测与让位（同 PID 顶层窗口） | ✅ |
+| 弹窗检测与让位（同 PID、viewable 顶层窗口） | ✅ |
+| 游戏最小化/关闭时收起覆盖层并重置 UI | ✅ |
 | Avalonia 最小 UI（窗口选择/开始/停止/退出） | ✅ |
 | 画面变化时 60fps（1280×720→3840×2160 合成测试） | ✅ |
 | 静止画面不重复捕获/呈现 | ✅ |
 | Anime4K / FSR / 混合 GL+Vulkan 管线 | ⏳ M0b |
-| 真实游戏验收（腐姬 / 秽翼的尤斯蒂娅） | ⏳ 待用户验证 |
+| 真实游戏验收（腐姬 / 秽翼的尤斯蒂娅） | ✅ 2026-11-02 复测通过 |
 
 ## 目标环境
 
@@ -72,24 +74,27 @@ dotnet run --project src/GemPrismUpscaler -c Release
 # 直接对指定窗口启动（十六进制或十进制窗口 ID）
 ./GemPrismUpscaler --window 0x1200001
 ./GemPrismUpscaler --window 0x1200001 --stretch
+./GemPrismUpscaler --window 0x1200001 --no-follow-focus
 ```
 
-默认保持源宽高比（fit，4:3 源会有左右黑边）；`--stretch` 拉伸填满。
+默认保持源宽高比（fit，4:3 源会有左右黑边）；`--stretch` 拉伸填满。界面里的“跟随焦点”默认开启：切到其他程序时覆盖层收起，回到游戏时恢复；`--no-follow-focus` 可关闭。
 
 日志：设置 `GEMPRISM_LOG=/path/app.log` 可指定日志文件；否则写入用户本地应用数据目录。
 
 ## 实现要点
 
 - **捕获**：`XShmGetImage` 直接读 client window；KWin 已做合成重定向，被遮挡窗口仍能读到自己的画面。XDamage 用于“帧级跳过”：没有变化就不捕获、不提交，静止画面 GPU 接近空闲。
-- **呈现**：NVIDIA Vulkan + Xlib swapchain，`vkCmdBlitImage` 线性缩放到 3840×2160；overlay 是 override-redirect 全屏窗口，不抢焦点。
-- **输入**：overlay 接收真实鼠标，按输出内容矩形反算到源窗口坐标，再用 `XSendEvent` 发给游戏；不使用点击穿透（点击会落到原窗口之外的桌面），也不依赖 XTest（KWin EIS 会弹授权且要移动真实指针）。
-- **弹窗**：轮询 `_NET_CLIENT_LIST`，发现源进程的额外顶层窗口就隐藏 overlay；关闭后恢复。当前依赖 `_NET_WM_PID`，后续可补 XRes。
+- **呈现**：NVIDIA Vulkan + Xlib swapchain，`vkCmdBlitImage` 线性缩放到 3840×2160；overlay 是 override-redirect 全屏窗口。启动、热键恢复、点击时通过 EWMH `_NET_ACTIVE_WINDOW` 把焦点交还游戏；游戏失焦时自动收起（可关闭）。
+- **输入**：overlay 接收真实鼠标，按输出内容矩形反算到源窗口坐标，再用 `XSendEvent` 发给游戏，并补发进入/离开源窗口的 crossing 事件；不使用点击穿透（点击会落到原窗口之外的桌面），也不依赖 XTest（KWin EIS 会弹授权且要移动真实指针）。
+- **弹窗**：轮询 `_NET_CLIENT_LIST`，发现源进程额外的 viewable 顶层窗口就隐藏 overlay；关闭后恢复并强制重绘一帧。当前依赖 `_NET_WM_PID`，后续可补 XRes。
+- **生命周期**：源窗口最小化/unmap 时收起，恢复时重新捕获；源窗口被销毁时引擎自行停止，UI 会复位按钮并显示原因。
 - **跨平台**：`ICaptureBackend` / `IPresentBackend` / `IInputBackend` / `IEffectBackend` 的边界已按平台无关设计；Linux 实现集中在 `Core/Platform/Linux`。
 
 ## 文档
 
 - [设计文档](.doc/design.md) —— 需求、架构、技术选型、实现细节
 - [路线图](.doc/roadmap.md) —— 阶段划分与验收标准
+- [更新记录](.doc/changelog.md) —— 修复、功能变更与已知限制
 
 ## 致谢
 
