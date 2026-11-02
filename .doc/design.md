@@ -342,29 +342,31 @@ M0a 当前：
 - Vulkan `vkCmdBlitImage` 双线性重采样到目标尺寸（无 shader/pipeline）
 - fit / stretch 两种几何；1280×720 → 3840×2160 实测约 60fps
 
-M0b 计划内置：
+M0b 实际（v0.1.2）：
 
-- Anime4K `Upscale_CNN_x2_M` + `Clamp_Highlights`（需要把 mpv hook 格式展开成普通 GLSL/SPIR-V）
-- Lanczos 重采样（收尾用）
-- FSR1 EASU + RCAS
+- **Anime4K `Upscale_CNN_x2_S`**：4 层 3×3 CNN（8 输入通道按正/负半轴拆成两组 4 通道）+ Depth-to-Space 2× 残差。mpv user-shader 格式由 `tools/build_shaders.py` 展开为 5 个独立 Vulkan compute shader，中间纹理 `rgba16f`，SPIR-V 离线编译并作为嵌入资源分发；运行时不依赖 glslang。
+- **Lanczos-2 收尾**：4×4 taps，从 2× 结果重采样到最终内容矩形；由 graphics pipeline 直接写入 swapchain，render pass 负责清黑边。这样不需要额外的 4K 中间纹理，也避免 format 不兼容的 `vkCmdBlitImage`。
+- **几何**：fit / stretch；fit 时先用源宽高比算出内容矩形，再把 2× 结果映射到该矩形。1024×768 fit → 2× 2048×1536 → Lanczos 到 2880×2160，居中 x=480。
+- **算法切换**：`EffectMode.Anime4K`（默认）/ `EffectMode.Bilinear`；UI“超分算法”下拉框，CLI `--effect anime4k|bilinear`。双线性路径保持 M0a 的单次 `vkCmdBlitImage`，用于对比和故障回退。
+- **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1）。Anime4K S 是效果/性能折中；M/L 变体后续可按同一管线接入。
 
-effect 描述格式：
+未来的 effect 描述格式（M1，尚未实现）：
 
 ```toml
 name = "anime4k-2x"
-description = "Anime4K CNN 2x upscale with highlight clamping"
-
-[[pass]]
-name = "clamp"
-shader = "shaders/anime4k/Anime4K_Clamp_Highlights.glsl"
-scaling = "normal"
-scale = [1.0, 1.0]
+description = "Anime4K CNN 2x upscale + Lanczos-2 finish"
 
 [[pass]]
 name = "upscale"
-shader = "shaders/anime4k/Anime4K_Upscale_CNN_x2_M.glsl"
+shader = "anime4k_conv0..3 + d2s"
 scaling = "normal"
 scale = [2.0, 2.0]
+
+[[pass]]
+name = "finish"
+shader = "lanczos"
+scaling = "normal"
+scale = [1.5, 1.5]
 ```
 
 ### 6.5 配置与 Profile
@@ -443,6 +445,21 @@ allow_windowed = true
 | 未测 | 真实游戏、Anime4K、端到端光子延迟、4K 源、多显示器 |
 
 这些数字只证明“链路能跑、能到 60fps”，不等于 M0 最终验收；真实游戏（腐姬 / 秽翼的尤斯蒂娅）仍需用户验证。
+
+### 7.6 M0b 本机实测（v0.1.2，2026-11-02）
+
+| 项 | 结果 |
+|---|---|
+| 效果链 | Anime4K S 5 pass（rgba16f）+ Lanczos-2 graphics pass |
+| 1280×720→3840×2160 动态画面 | 42–51 fps；当前桌面 HDR/144Hz 模式下合成器上限约 48–50 fps，基线 `813e6a0` 同环境 49–51 fps |
+| GPU 占用 | Anime4K 约 35–46%，显存 515 MiB；双线性约 33–40%，453 MiB（RTX 4060 Laptop） |
+| 4:3 fit（1024×768 → 2880×2160） | 左右黑边像素均值 0，内容居中，比例正确 |
+| 4:3 stretch | 铺满 3840×2160，无黑边 |
+| 画质（测试卡，4K 截图） | 梯度均值 3.43 vs 双线性 2.71（+26%）；Laplacian 均值 3.49 vs 1.79（+96%）；文本/1px 线更锐利 |
+| 静止画面 | 首次捕获+呈现后 0 capture / 0 present；不会因效果链空转 |
+
+结论：Anime4K 路径在 4K 下有足够 GPU 余量；当前帧率主要受合成器/显示模式上限限制。真实游戏的画质与帧率仍需用户主观验收。
+
 
 ---
 

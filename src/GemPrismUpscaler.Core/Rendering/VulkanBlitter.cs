@@ -22,6 +22,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private readonly ulong _window;
     private readonly int _outputWidth;
     private readonly int _outputHeight;
+    private readonly EffectMode _effect;
 
     private Vk _vk = null!;
     private Instance _instance;
@@ -45,6 +46,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private CommandPool _commandPool;
     private CommandBuffer _commandBuffer;
     private Image _sourceImage;
+    private ImageView _sourceView;
     private DeviceMemory _sourceMemory;
     private VkBuffer _stagingBuffer;
     private DeviceMemory _stagingMemory;
@@ -53,18 +55,22 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private int _sourceHeight;
     private int _sourceStride;
     private ImageLayout _sourceLayout = ImageLayout.Undefined;
+    private Anime4KChain? _anime4k;
+    private LanczosPresenter? _presenter;
     private bool _disposed;
 
     public string DeviceName { get; private set; } = "?";
     public string SwapchainFormatName => _swapchainFormat.ToString();
     public Extent2D SwapchainExtent => _swapchainExtent;
 
-    public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight)
+    public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
+        EffectMode effect = EffectMode.Anime4K)
     {
         _display = display;
         _window = window;
         _outputWidth = outputWidth;
         _outputHeight = outputHeight;
+        _effect = effect;
         CreateInstance();
         CreateSurface();
         PickDevice();
@@ -72,6 +78,11 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CreateSwapchain();
         CreateSyncAndCommands();
         CreateStagingBuffer();
+        if (_effect == EffectMode.Anime4K)
+        {
+            _presenter = new LanczosPresenter(_vk, _device, _swapchainImages, _swapchainViews,
+                _swapchainFormat, _swapchainExtent);
+        }
     }
 
     private void CreateInstance()
@@ -422,6 +433,14 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (_sourceImage.Handle != 0 && width == _sourceWidth && height == _sourceHeight)
             return;
 
+        _anime4k?.Dispose();
+        _anime4k = null;
+
+        if (_sourceView.Handle != 0)
+        {
+            _vk.DestroyImageView(_device, _sourceView, null);
+            _sourceView = default;
+        }
         if (_sourceImage.Handle != 0)
         {
             _vk.DestroyImage(_device, _sourceImage, null);
@@ -439,13 +458,13 @@ public sealed unsafe class VulkanBlitter : IDisposable
         {
             SType = StructureType.ImageCreateInfo,
             ImageType = ImageType.Type2D,
-            Format = _swapchainFormat,
+            Format = Format.B8G8R8A8Unorm,
             Extent = new Extent3D((uint)width, (uint)height, 1),
             MipLevels = 1,
             ArrayLayers = 1,
             Samples = SampleCountFlags.Count1Bit,
             Tiling = ImageTiling.Optimal,
-            Usage = ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit,
+            Usage = ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit | ImageUsageFlags.SampledBit,
             SharingMode = SharingMode.Exclusive,
             InitialLayout = ImageLayout.Undefined
         };
@@ -459,16 +478,33 @@ public sealed unsafe class VulkanBlitter : IDisposable
         };
         Check(_vk.AllocateMemory(_device, &alloc, null, out _sourceMemory), "AllocateMemory(source)");
         Check(_vk.BindImageMemory(_device, _sourceImage, _sourceMemory, 0), "BindImageMemory");
+
+        var view = new ImageViewCreateInfo
+        {
+            SType = StructureType.ImageViewCreateInfo,
+            Image = _sourceImage,
+            ViewType = ImageViewType.Type2D,
+            Format = Format.B8G8R8A8Unorm,
+            SubresourceRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            }
+        };
+        Check(_vk.CreateImageView(_device, &view, null, out _sourceView), "CreateImageView(source)");
     }
 
     /// <summary>Uploads one BGRA frame and presents it into destRect.</summary>
     public void Render(ReadOnlySpan<byte> frame, int width, int height, int stride, RectI destRect)
     {
-        EnsureSource(width, height);
         if (frame.Length < stride * height) throw new ArgumentException("frame buffer too small");
 
         var inFlight = _inFlight;
         Check(_vk.WaitForFences(_device, 1, &inFlight, true, 2_000_000_000), "WaitForFences");
+        EnsureSource(width, height);
         _vk.ResetFences(_device, 1, &inFlight);
 
         uint imageIndex = 0;
@@ -486,77 +522,16 @@ public sealed unsafe class VulkanBlitter : IDisposable
         };
         Check(_vk.BeginCommandBuffer(_commandBuffer, &begin), "BeginCommandBuffer");
 
-        ImageLayout oldSwap = _swapchainFirstUse[imageIndex] ? ImageLayout.Undefined : ImageLayout.PresentSrcKhr;
-        _swapchainFirstUse[imageIndex] = false;
-        TransitionImage(_swapchainImages[imageIndex], oldSwap, ImageLayout.TransferDstOptimal,
-            new ImageSubresourceRange
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
-            });
-
-        var black = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 };
-        var fullRange = new ImageSubresourceRange
-        {
-            AspectMask = ImageAspectFlags.ColorBit,
-            BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
-        };
-        _vk.CmdClearColorImage(_commandBuffer, _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, &black, 1, &fullRange);
-
-        if (_sourceLayout == ImageLayout.Undefined)
-        {
-            TransitionImage(_sourceImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal, fullRange);
-            _sourceLayout = ImageLayout.TransferDstOptimal;
-        }
-        else if (_sourceLayout == ImageLayout.TransferSrcOptimal)
-        {
-            TransitionImage(_sourceImage, ImageLayout.TransferSrcOptimal, ImageLayout.TransferDstOptimal, fullRange);
-            _sourceLayout = ImageLayout.TransferDstOptimal;
-        }
-
-        var region = new BufferImageCopy
-        {
-            BufferOffset = 0,
-            BufferRowLength = 0,
-            BufferImageHeight = 0,
-            ImageSubresource = new ImageSubresourceLayers
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
-            },
-            ImageOffset = new Offset3D(0, 0, 0),
-            ImageExtent = new Extent3D((uint)width, (uint)height, 1)
-        };
-        _vk.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, _sourceImage,
-            ImageLayout.TransferDstOptimal, 1, &region);
-        TransitionImage(_sourceImage, ImageLayout.TransferDstOptimal, ImageLayout.TransferSrcOptimal, fullRange);
-        _sourceLayout = ImageLayout.TransferSrcOptimal;
-
-        var blit = new ImageBlit
-        {
-            SrcSubresource = new ImageSubresourceLayers
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
-            },
-            DstSubresource = new ImageSubresourceLayers
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
-            }
-        };
-        blit.SrcOffsets.Element0 = new Offset3D(0, 0, 0);
-        blit.SrcOffsets.Element1 = new Offset3D(width, height, 1);
-        blit.DstOffsets.Element0 = new Offset3D(destRect.X, destRect.Y, 0);
-        blit.DstOffsets.Element1 = new Offset3D(destRect.Right, destRect.Bottom, 1);
-        _vk.CmdBlitImage(_commandBuffer, _sourceImage, ImageLayout.TransferSrcOptimal,
-            _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
-
-        TransitionImage(_swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr, fullRange);
+        if (_effect == EffectMode.Bilinear)
+            RecordBilinear(imageIndex, width, height, destRect);
+        else
+            RecordAnime4K(imageIndex, width, height, destRect);
 
         Check(_vk.EndCommandBuffer(_commandBuffer), "EndCommandBuffer");
 
-        var waitStage = PipelineStageFlags.TransferBit;
+        var waitStage = _effect == EffectMode.Anime4K
+            ? PipelineStageFlags.TransferBit | PipelineStageFlags.ComputeShaderBit | PipelineStageFlags.ColorAttachmentOutputBit
+            : PipelineStageFlags.TransferBit;
         var cb = _commandBuffer;
         var renderFinished = _renderSemaphores[imageIndex];
         var submit = new SubmitInfo
@@ -585,6 +560,110 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Result pr = _swapchainExt.QueuePresent(_queue, &present);
         if (pr != Result.Success && pr != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkQueuePresentKHR failed: {pr}");
+    }
+
+    private void RecordBilinear(uint imageIndex, int width, int height, RectI destRect)
+    {
+        ImageLayout oldSwap = _swapchainFirstUse[imageIndex] ? ImageLayout.Undefined : ImageLayout.PresentSrcKhr;
+        _swapchainFirstUse[imageIndex] = false;
+        TransitionImage(_swapchainImages[imageIndex], oldSwap, ImageLayout.TransferDstOptimal,
+            new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
+            });
+
+        var black = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 };
+        var fullRange = new ImageSubresourceRange
+        {
+            AspectMask = ImageAspectFlags.ColorBit,
+            BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
+        };
+        _vk.CmdClearColorImage(_commandBuffer, _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, &black, 1, &fullRange);
+
+        if (_sourceLayout == ImageLayout.Undefined)
+        {
+            TransitionImage(_sourceImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal, fullRange);
+            _sourceLayout = ImageLayout.TransferDstOptimal;
+        }
+        else if (_sourceLayout == ImageLayout.TransferSrcOptimal)
+        {
+            TransitionImage(_sourceImage, ImageLayout.TransferSrcOptimal, ImageLayout.TransferDstOptimal, fullRange);
+            _sourceLayout = ImageLayout.TransferDstOptimal;
+        }
+
+        CopySourceImage(width, height, ImageLayout.TransferDstOptimal);
+        TransitionImage(_sourceImage, ImageLayout.TransferDstOptimal, ImageLayout.TransferSrcOptimal, fullRange);
+        _sourceLayout = ImageLayout.TransferSrcOptimal;
+
+        var blit = new ImageBlit
+        {
+            SrcSubresource = new ImageSubresourceLayers
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+            },
+            DstSubresource = new ImageSubresourceLayers
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+            }
+        };
+        blit.SrcOffsets.Element0 = new Offset3D(0, 0, 0);
+        blit.SrcOffsets.Element1 = new Offset3D(width, height, 1);
+        blit.DstOffsets.Element0 = new Offset3D(destRect.X, destRect.Y, 0);
+        blit.DstOffsets.Element1 = new Offset3D(destRect.Right, destRect.Bottom, 1);
+        _vk.CmdBlitImage(_commandBuffer, _sourceImage, ImageLayout.TransferSrcOptimal,
+            _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
+
+        TransitionImage(_swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr, fullRange);
+    }
+
+    private void RecordAnime4K(uint imageIndex, int width, int height, RectI destRect)
+    {
+        if (_sourceLayout == ImageLayout.Undefined)
+        {
+            VulkanUtil.ImageBarrier(_vk, _commandBuffer, _sourceImage, ImageLayout.Undefined, ImageLayout.General,
+                0, AccessFlags.TransferWriteBit, PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.TransferBit);
+            _sourceLayout = ImageLayout.General;
+        }
+        else if (_sourceLayout != ImageLayout.General)
+        {
+            VulkanUtil.ImageBarrier(_vk, _commandBuffer, _sourceImage, _sourceLayout, ImageLayout.General,
+                0, AccessFlags.TransferWriteBit, PipelineStageFlags.AllCommandsBit, PipelineStageFlags.TransferBit);
+            _sourceLayout = ImageLayout.General;
+        }
+
+        CopySourceImage(width, height, ImageLayout.General);
+        VulkanUtil.ImageBarrier(_vk, _commandBuffer, _sourceImage, ImageLayout.General, ImageLayout.General,
+            AccessFlags.TransferWriteBit, AccessFlags.ShaderReadBit,
+            PipelineStageFlags.TransferBit, PipelineStageFlags.ComputeShaderBit);
+
+        _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height);
+        _presenter!.SetSource(_anime4k.OutputView);
+        _anime4k.Record(_commandBuffer);
+
+        bool firstUse = _swapchainFirstUse[imageIndex];
+        _swapchainFirstUse[imageIndex] = false;
+        _presenter.Record(_commandBuffer, imageIndex, destRect, firstUse);
+    }
+
+    private void CopySourceImage(int width, int height, ImageLayout layout)
+    {
+        var region = new BufferImageCopy
+        {
+            BufferOffset = 0,
+            BufferRowLength = 0,
+            BufferImageHeight = 0,
+            ImageSubresource = new ImageSubresourceLayers
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+            },
+            ImageOffset = new Offset3D(0, 0, 0),
+            ImageExtent = new Extent3D((uint)width, (uint)height, 1)
+        };
+        _vk.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, _sourceImage, layout, 1, &region);
     }
 
     private void CopyToStaging(ReadOnlySpan<byte> frame, int width, int height, int stride)
@@ -657,6 +736,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (_device.Handle != 0)
         {
             _vk.DeviceWaitIdle(_device);
+            _anime4k?.Dispose();
+            _presenter?.Dispose();
+            if (_sourceView.Handle != 0) _vk.DestroyImageView(_device, _sourceView, null);
             if (_stagingMapped != null) _vk.UnmapMemory(_device, _stagingMemory);
             if (_stagingBuffer.Handle != 0) _vk.DestroyBuffer(_device, _stagingBuffer, null);
             if (_stagingMemory.Handle != 0) _vk.FreeMemory(_device, _stagingMemory, null);

@@ -25,6 +25,7 @@ public sealed class UpscaleSession : IDisposable
 
     private readonly WindowInfo _source;
     private readonly ScalingMode _mode;
+    private readonly EffectMode _effect;
     private readonly ManualResetEventSlim _started = new(false);
     private readonly OverlayVisibility _visibility = new();
     private Thread? _thread;
@@ -51,6 +52,7 @@ public sealed class UpscaleSession : IDisposable
     public bool IsRunning => _thread is { IsAlive: true };
     public string OverlayTitle => "GemPrismOverlay";
     public string ExitReason => Volatile.Read(ref _exitReason);
+    public string EffectName => _effect == EffectMode.Anime4K ? "anime4k" : "bilinear";
 
     /// <summary>
     /// Hide the overlay when the source window loses input focus (and restore it
@@ -58,10 +60,12 @@ public sealed class UpscaleSession : IDisposable
     /// </summary>
     public bool FollowFocus { get; set; } = true;
 
-    public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit)
+    public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
+        EffectMode effect = EffectMode.Anime4K)
     {
         _source = source;
         _mode = mode;
+        _effect = effect;
     }
 
     public void Start()
@@ -119,7 +123,7 @@ public sealed class UpscaleSession : IDisposable
         _damage = new X11Damage(_display, _source.WindowId);
         _input = new X11Input(_display, _source.WindowId);
         _hotkey = new X11Hotkey(_display);
-        _blitter = new VulkanBlitter(_display, _overlay.Window, _screenWidth, _screenHeight);
+        _blitter = new VulkanBlitter(_display, _overlay.Window, _screenWidth, _screenHeight, _effect);
 
         // Starting the upscaler from the config UI leaves focus on our window.
         // Give it back to the game so keyboard/hover/activation work immediately.
@@ -133,9 +137,10 @@ public sealed class UpscaleSession : IDisposable
         }
         _focusedOnce = X11WindowProbe.IsFocused(_display, _source.WindowId);
 
-        Emit($"engine started source=0x{_source.WindowId:x} '{_source.Title}' {geometry.Value.Width}x{geometry.Value.Height} " +
-             $"screen={_screenWidth}x{_screenHeight} dest={DestRect} device='{_blitter.DeviceName}' " +
-             $"format={_blitter.SwapchainFormatName} extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} " +
+        Emit($"engine started version={AppInfo.Version} effect={EffectName} source=0x{_source.WindowId:x} '{_source.Title}' " +
+             $"{geometry.Value.Width}x{geometry.Value.Height} screen={_screenWidth}x{_screenHeight} dest={DestRect} " +
+             $"device='{_blitter.DeviceName}' format={_blitter.SwapchainFormatName} " +
+             $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} " +
              $"damage={_damage.Available} hotkey={_hotkey.IsGrabbed} focus={_focusedOnce} overlay=0x{_overlay.Window:x}");
     }
 

@@ -3,6 +3,7 @@ using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
+using GemPrismUpscaler.Core.Rendering;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -15,7 +16,8 @@ sealed class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" || args[0] == "--help"))
+        if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" ||
+                                args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
             return;
@@ -28,6 +30,12 @@ sealed class Program
     {
         try
         {
+            if (args[0] == "--version")
+            {
+                Console.WriteLine(AppInfo.DisplayName);
+                return 0;
+            }
+
             using var display = new X11Display();
             if (args[0] == "--list" || args[0] == "--help")
             {
@@ -36,12 +44,13 @@ sealed class Program
                 return 0;
             }
 
-            if (args.Length < 2) { Console.Error.WriteLine("usage: --window <id> [--stretch] [--no-follow-focus]"); return 2; }
+            if (args.Length < 2) { Console.Error.WriteLine("usage: --window <id> [--stretch] [--effect anime4k|bilinear] [--no-follow-focus]"); return 2; }
             ulong id = ParseId(args[1]);
             var info = X11WindowEnumerator.List(display).FirstOrDefault(w => w.WindowId == id);
             if (info is null) { Console.Error.WriteLine($"window 0x{id:x} not found"); return 3; }
             var mode = args.Any(a => a == "--stretch") ? ScalingMode.Stretch : ScalingMode.Fit;
-            using var session = new UpscaleSession(info, mode)
+            var effect = EffectFromArgs(args);
+            using var session = new UpscaleSession(info, mode, effect)
             {
                 FollowFocus = !args.Any(a => a == "--no-follow-focus")
             };
@@ -58,6 +67,16 @@ sealed class Program
             Console.Error.WriteLine(ex);
             return 1;
         }
+    }
+
+    private static EffectMode EffectFromArgs(string[] args)
+    {
+        int index = Array.IndexOf(args, "--effect");
+        if (index >= 0 && index + 1 < args.Length)
+            return args[index + 1].Equals("bilinear", StringComparison.OrdinalIgnoreCase)
+                ? EffectMode.Bilinear
+                : EffectMode.Anime4K;
+        return EffectMode.Anime4K;
     }
 
     private static ulong ParseId(string s)

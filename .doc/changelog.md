@@ -1,5 +1,41 @@
 # 更新记录
 
+## v0.1.2（2026-11-02）· M0b：Anime4K 2× + Lanczos
+
+M0b 把 M0a 的“双线性放大”升级为真正的超分管线，并保留双线性作为对比/回退。
+
+### 新增
+
+- **Anime4K 2× CNN（S）**：`Upscale_CNN_x2_S` 展开为 5 个 Vulkan compute pass（4 层 3×3 CNN + Depth-to-Space 残差），中间纹理 `rgba16f`。
+- **Lanczos-2 收尾**：4×4 taps 从 2× 结果重采样到最终内容矩形；graphics pass 直接写入 swapchain，render pass 清黑边。
+- **算法切换**：UI“超分算法”下拉框、CLI `--effect anime4k|bilinear`；默认 Anime4K。
+- **版本号**：`Directory.Build.props` 统一 `0.1.2`；UI 标题、`--version`、日志都显示 v0.1.2。
+- **离线着色器构建**：`tools/build_shaders.py` 解析 mpv user-shader 指令、生成 GLSL、`glslangValidator` 编译、`spirv-val` 校验；SPIR-V 嵌入程序，运行时不依赖 glslang。
+
+### 技术方案
+
+- `Anime4KChain`：5 个 compute pipeline、每 pass 独立 descriptor set、48 字节 push constants（输出尺寸 + 5 张纹理尺寸）；pass 间用 image barrier 做 `ShaderWrite → ShaderRead`。
+- `LanczosPresenter`：全屏三角形 + Lanczos-2 fragment shader；通过 viewport/scissor 把绘制限制在内容矩形，render pass 的 clear 负责黑边；swapchain 从 `PresentSrcKHR`/`Undefined` 转入 `ColorAttachmentOptimal`。
+- 源图仍由 XShm → staging → `B8G8R8A8_UNORM` 上传；效果链读取源图，输出 2× 图像；最终 pass 直接写 swapchain，避免额外的 4K 中间纹理和 float→unorm blit 的格式兼容问题。
+- 保留 M0a 的 `vkCmdBlitImage` 路径；`EffectMode.Bilinear` 可在运行时由 CLI/UI 选择。
+
+### 验证
+
+- `dotnet build -c Release`：0 warning / 0 error；`dotnet test -c Release`：23/23（新增 8 个：版本号 1 个 + 7 个着色器资源）。
+- 4:3 fit（1024×768 → 2880×2160）：左右黑边像素均值 0，内容居中。
+- 4:3 stretch：铺满 3840×2160，无黑边。
+- 画质测试卡（1280×720 → 4K，8-bit PNG 截图）：梯度均值 Anime4K 3.43 vs 双线性 2.71（+26%）；Laplacian 均值 3.49 vs 1.79（+96%）。
+- 1280×720 动态画面：42–51 fps；当前 HDR/144Hz 桌面合成器上限约 48–50 fps，基线同环境 49–51 fps。GPU 占用 Anime4K 约 35–46%，显存 515 MiB。
+- 静止画面仍然 0 capture / 0 present。
+
+### 注意事项
+
+- 本版本只内置 Anime4K **S**；M/L 变体未接入。FSR1、`Clamp_Highlights`、混合 GL+Vulkan 管线不在 M0b 范围。
+- 画质指标是合成测试卡上的客观锐度对比，真实游戏的观感仍需用户复测；Anime4K 对 2D/动漫风格效果最好。
+- 帧率目前受本机 HDR/144Hz 合成器上限影响，不能据此判断 60Hz 下的上限；GPU 仍有约 60% 余量。
+- 4K 输出下效果链显存约 515 MiB（RTX 4060 Laptop 8 GB 足够）；后续 4K 源/多显示器需要重新评估。
+- HDR 仍是 SDR 直通，未做色彩管理。
+
 ## 2026-11-02 · M0a 验收整改（0.1.x）
 
 对应 `.agent/M0a验收记录.md` 的 5 条实测问题。改动集中在捕获/呈现/输入/窗口生命周期，不涉及 M0b 的 Anime4K/FSR。用户已在腐姬 / 秽翼的尤斯蒂娅上复测通过。

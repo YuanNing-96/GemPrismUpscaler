@@ -1,8 +1,10 @@
 using Avalonia.Controls;
 using Avalonia.Threading;
+using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
+using GemPrismUpscaler.Core.Rendering;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,6 +20,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"宝石棱镜 {AppInfo.DisplayName}";
         RefreshButton.Click += (_, _) => RefreshWindows();
         StartButton.Click += (_, _) => StartSession();
         StopButton.Click += (_, _) => StopSession();
@@ -62,7 +65,8 @@ public partial class MainWindow : Window
 
         StopSession();
         var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
-        var session = new UpscaleSession(info, mode)
+        var effect = EffectCombo.SelectedIndex == 1 ? EffectMode.Bilinear : EffectMode.Anime4K;
+        var session = new UpscaleSession(info, mode, effect)
         {
             FollowFocus = FollowFocusCheck.IsChecked != false
         };
@@ -74,7 +78,7 @@ public partial class MainWindow : Window
             StartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
             StatusText.Text = $"运行中：{info.Title}（Alt+Shift+A 显示/隐藏）";
-            AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} mode={mode}");
+            AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} mode={mode} effect={session.EffectName}");
         }
         catch (Exception ex)
         {
