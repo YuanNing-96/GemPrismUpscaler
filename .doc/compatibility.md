@@ -59,11 +59,13 @@
 3. **FPS/raw input**：`XSendEvent` 只能更新 X/Wine 消息队列；raw input/DirectInput/`GetCursorPos` 读真实设备，当前方案无效。
 4. **HDR**：SDR 直通；HDR 游戏可能发灰/偏色，等 M2 的 linear/HDR 路径。
 5. **4K 源**：2× 后是 8K，显存/带宽显著上升；M1a 只承诺常见 VN 分辨率（720p/1024×768/1080p）。
-6. **swapchain resize**：M1a 在显示器变化时重建 overlay/blitter；源窗口 resize 会重建 capture，但显示模式本身的 swapchain recreation 仍不完整。
-7. **单实例**：M1a 第二实例只提示错误；激活已有窗口是 M1c 设置项。
-8. **设置界面**：M1a 没有完整设置界面；热键、日志路径、默认显示器等见 backlog/M1c。
-9. **自定义 shader**：M1a 只内置 S；M1b 接入 S/M/L；自定义 shader 的运行时策略在 M1c 决定。
-10. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
+6. **黑边输入**：非 stretch（fit）时左右/上下黑边不转发鼠标点击和滚轮，这是预期行为，因为黑边不是源窗口像素；stretch 后原黑边区域被画面覆盖，会正常转发。
+7. **swapchain resize**：M1a 在显示器变化时重建 overlay/blitter；源窗口 resize 会重建 capture，但显示模式本身的 swapchain recreation 仍不完整。
+8. **单实例**：M1a 第二实例只提示错误；激活已有窗口是 M1c 设置项。
+9. **设置界面**：M1a 没有完整设置界面；热键、日志路径、默认显示器等见 backlog/M1c。
+10. **自定义 shader**：M1a 只内置 S；M1b 接入 S/M/L；自定义 shader 的运行时策略在 M1c 决定。
+11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
+12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
 
 ## 5. 平台差异
 
