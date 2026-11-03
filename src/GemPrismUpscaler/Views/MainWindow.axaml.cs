@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private UpscaleSession? _session;
     private List<WindowInfo> _windows = new();
     private List<MonitorInfo> _monitors = new();
+    private string _runningTitle = string.Empty;
 
     public MainWindow() : this(null)
     {
@@ -124,9 +125,10 @@ public partial class MainWindow : Window
         {
             session.Start();
             _session = session;
+            _runningTitle = info.Title;
             StartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
-            StatusText.Text = $"运行中：{info.Title}（显示器：{session.MonitorName}，Alt+Shift+A 显示/隐藏）";
+            StatusText.Text = $"运行中：{_runningTitle}（显示器：{session.MonitorName}，Alt+Shift+A 显示/隐藏）";
             AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} " +
                       $"mode={mode} effect={session.EffectName} monitor={session.MonitorName}");
             Log.Write($"ui session started pid={Environment.ProcessId} window=0x{info.WindowId:x} " +
@@ -144,6 +146,7 @@ public partial class MainWindow : Window
     {
         var session = _session;
         _session = null;
+        _runningTitle = string.Empty;
         if (session is not null)
         {
             session.Message -= OnSessionMessage;
@@ -159,7 +162,17 @@ public partial class MainWindow : Window
     private void WatchSession()
     {
         var session = _session;
-        if (session is null || session.IsRunning) return;
+        if (session is null) return;
+
+        if (session.IsRunning)
+        {
+            // Auto mode can move the overlay to another monitor; keep the status
+            // line in sync without waiting for a message.
+            string text = $"运行中：{_runningTitle}（显示器：{session.MonitorName}，Alt+Shift+A 显示/隐藏）";
+            if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
+                StatusText.Text = text;
+            return;
+        }
 
         // The engine stops itself when the game window disappears. Surface the
         // reason instead of leaving the UI in "running" state.
