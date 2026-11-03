@@ -1,6 +1,6 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.1 · 对应 M0 规划
+版本 0.2 · 对应 M1a 规划
 
 ---
 
@@ -20,7 +20,7 @@
 
 - 不做帧生成（frame generation），那是另一个问题域
 - 不做游戏内覆盖层（overlay HUD），避免与反作弊冲突
-- M0 不做 HDR、多显示器、核显与混合显卡
+- M1a 不做 HDR 色彩管理、完整多显示器、核显与混合显卡；FPS/raw input 放到后续阶段
 - 不做视频播放器的超分，mpv 已经有成熟方案
 
 ### 1.3 与相邻方案的差异
@@ -45,10 +45,10 @@
 | F3 | 支持源与目标宽高比不一致（fit / fill / crop / 绝对尺寸） | M0 |
 | F4 | 检测目标进程弹出的新窗口，超分画面自动让位 | M0 |
 | F5 | 全局热键切换超分开关 | M0 |
-| F6 | 按进程名 / 窗口类名自动套用配置 | M1 |
-| F7 | effect 管线可通过配置文件组合，支持自定义 GLSL | M1 |
-| F8 | 进出超分的缩放动画 | M1 |
-| F9 | 脏矩形增量处理，静止画面不重复计算 | M1 |
+| F6 | 按进程名 / 窗口类名自动套用配置 | M1c |
+| F7 | effect 管线可通过配置文件组合，支持自定义 GLSL | M1c |
+| F8 | 进出超分的缩放动画 | M1c |
+| F9 | 脏矩形增量处理，静止画面不重复计算 | M1b |
 | F10 | 原生 Wayland 窗口捕获 | M2 |
 | F11 | 混合 OpenGL / Vulkan effect 管线 | M2 |
 
@@ -195,21 +195,23 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 
 ### 4.5 分数缩放与 overlay 尺寸
 
-本机实测（KWin 6.8.2 + XWayland 24.1.14，150% 缩放）：
+本机实测（KWin 6.8.2 + XWayland 24.1.14，150% 缩放 + 一块 100% 竖屏）：
 
-- kscreen 的逻辑几何是 2560×1440，但 XWayland root 是 **3840×2160**；
-- 一个 320×180 的 X11 窗口在屏幕上也是 320×180，KWin **不会**在合成阶段把 XWayland 窗口整体放大；
+- kscreen 的逻辑几何是 2560×1440 + 1200×1920，但 XWayland root 是 **5640×2880**；
+- XWayland 的每块显示器矩形是“逻辑尺寸 × 该屏缩放”，例如 HDMI 2560×1440×1.5 = 3840×2160，位置 +1800+489；DP-1 1200×1920×1.0 旋转后 = 1800×2880，位置 0,0；
+- 一个 320×180 的 X11 窗口在屏幕上仍是 320×180，KWin **不会**在合成阶段把 XWayland 窗口整体放大；
 - `[Xwayland] Scale=1.5` 是让 X11 应用按 `Xft.dpi=144` 自己处理缩放；不处理 DPI 的原始 Xlib/Wine 窗口保持 1:1。
 
-因此 overlay 必须按 **X11 root 的物理尺寸**创建（本机 3840×2160），不能按 2560×1440。1280×720 源到 4K 是 **3×**：
+因此 **M1a 起 overlay 必须按 XRandR 的单块显示器矩形创建**，不能按整个 root，也不能按逻辑尺寸。多屏时选择游戏窗口所在屏（或用户手动指定），overlay/swapchain 只覆盖该屏：
 
 ```
-1280×720 --CNN 2×--> 2560×1440 --resample 1.5×--> 3840×2160
+1280×720 --CNN 2×--> 2560×1440 --resample 1.5×--> 3840×2160（HDMI）
+1280×720 --CNN 2×--> 2560×1440 --resample 0.703×--> 1800×1012（DP-1 竖屏，上下黑边）
 ```
 
-最后一步由我们做，不是合成器做；不存在“合成器线性放大导致软化”的问题，反而是物理像素 1:1。不要硬编码 2560×1440，用 `DisplayWidth/Height` 或 XRandR 当前 mode。100% 与 150% 都走同一套 root 尺寸逻辑。
+最后一步由我们做，不是合成器做；不存在“合成器线性放大导致软化”的问题，反而是物理像素 1:1。显示器矩形从 `XRRGetMonitors` 读取，包含每屏的缩放和旋转。100%、150% 和混合缩放都走同一套逻辑。
 
-若以后把 KWin 切成“由系统缩放 XWayland”模式，行为会不同；需要重新实测并做运行时探测。M0 的前置条件是当前“X11 应用自己缩放”模式。
+若以后把 KWin 切成“由系统缩放 XWayland”模式，行为会不同；需要重新实测并做运行时探测。M1a 的前置条件是当前“X11 应用自己缩放”模式。
 
 ### 4.6 弹窗让位
 
@@ -235,7 +237,7 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 - 默认路径：GLSL 源码经 glslang 编译为 SPIR-V，全部在 Vulkan 中执行
 - 只有显式标记 `backend = "gl"` 且依赖 GL 特有能力的 pass 才走 GL
 
-原计划在 M0a 闭环后做 2 周混合路径时间盒实验；**该实验未执行**，M0 直接采用全 Vulkan。以下前提/路径仅作为 M2 的参考。关键前提：GL 必须与 Vulkan 跑在同一块 GPU 上。本机 XWayland GLX 在 AMD，而 Vulkan 在 NVIDIA，不能直接用 GLX；已验证用 **headless EGL surfaceless context**（NVIDIA）创建 GL 上下文并导出 DMA-BUF（`.agent/probe/egltest.c`）。Vulkan 侧导入与同步仍需 spike；若时间盒内不达标，降级为全 Vulkan，接口保持不变。
+M0 已决定不做混合路径，直接采用全 Vulkan；**M1 仍不做混合着色器管线**。以下前提/路径仅作为 M2 的参考。关键前提：GL 必须与 Vulkan 跑在同一块 GPU 上。本机 XWayland GLX 在 AMD，而 Vulkan 在 NVIDIA，不能直接用 GLX；已验证用 **headless EGL surfaceless context**（NVIDIA）创建 GL 上下文并导出 DMA-BUF（`.agent/probe/egltest.c`）。Vulkan 侧导入与同步仍需 spike；若验证不达标，保持全 Vulkan，接口不变。
 
 **跨 API 的两条实现路径**：
 
@@ -291,7 +293,7 @@ public static AppBuilder BuildAvaloniaApp()
 
 ### 6.1 捕获（X11）
 
-M0a 实际路径：
+当前路径：
 
 ```
 XShmGetImage(直接读 client window)
@@ -305,29 +307,31 @@ XShmGetImage(直接读 client window)
 - KWin 合成会话里窗口已经被重定向，实测 `XShmGetImage` 直接读被遮挡窗口就能拿到窗口自己的内容；**不需要**先 `XCompositeRedirectWindow`。只有在无合成器的原生 X11 会话才需要重定向；若 RedirectWindow 返回 BadAccess 就跳过。
 - 窗口最小化时捕获可能返回陈旧帧；检测 `map_state` / `_NET_WM_STATE_HIDDEN` 后暂停。
 - 直接捕获 client window 本身就不含边框；`_NET_FRAME_EXTENTS` 只在需要把 client 坐标换算到 frame 坐标时使用。
-- XDamage 在 XWayland 下常报全窗口；M0a 用 Damage 做**帧级跳过**（无变化不捕获、不呈现），静止画面接近零开销。M1 若要按块重算，需要额外的分块哈希，不能直接依赖 Damage 矩形。
-- M0 用 XShm 回读（720p 约 3.7 MB/帧）；M1 换 DRI3 + DMA-BUF 零拷贝。
+- XDamage 在 XWayland 下常报全窗口；当前用 Damage 做**帧级跳过**（无变化不捕获、不呈现），静止画面接近零开销。M1b 若要按块重算，需要额外的分块哈希，不能直接依赖 Damage 矩形。
+- XShm 回读（720p 约 3.7 MB/帧）。M1b 先做持久 staging 和分块上传；DRI3/DMA-BUF 零拷贝作为可行性 spike，X11 下不保证有通用路径。
+- 窗口位置每 200ms 重新查询，用于自动选屏和跨屏移动；窗口尺寸变化时重建 capture。
 
 ### 6.2 呈现（X11）
 
-- 创建 override-redirect 全屏窗口，尺寸取 **X11 root 物理尺寸**（本机 3840×2160）。
+- 创建 override-redirect 窗口，**位置和尺寸取 XRandR 的单块显示器矩形**（例如 HDMI `3840×2160+1800+489`、DP-1 `1800×2880+0+0`），不再用整个 root。
+- 每个显示器独立 Vulkan swapchain；窗口跨屏移动或选屏改变时销毁旧 overlay/blitter 再重建，重建后强制重绘一帧。
 - override-redirect 窗口不受 WM 管理，不需要 `_NET_WM_STATE_ABOVE`；实测可以直接盖住 EWMH 全屏窗口。
 - 不把 input shape 置空：overlay 要接收真实鼠标再转发（见 6.3）。
 - 不把输入焦点留在配置界面：启动会话、热键重新显示、点击覆盖窗口时，通过 EWMH `_NET_ACTIVE_WINDOW`（source indication=2）+ `XSetInputFocus` 把焦点交还游戏。只调 `XSetInputFocus` 会被 KWin 的焦点窃取防护忽略（实测）。
 - 设置 `WM_HINTS.input=False`，overlay 自身不参与焦点；`FollowFocus` 默认开启：游戏失去焦点时收起覆盖窗口，回到游戏时恢复。配置界面提供开关，CLI 用 `--no-follow-focus` 关闭。
-- 每次重新显示都重新捕获并呈现一帧（unmap 后 surface 内容未定义）；显示时把当前真实指针位置同步给游戏一次，避免悬停状态停留在旧位置。
-- 不要用 `XFixesHideCursor`（这是整个 X server 级别）；M0a 保持系统光标。
-- 用 Vulkan swapchain（Xlib/XCB surface）呈现。M0a 用 `vkCmdBlitImage` 做线性重采样，不需要 shader/pipeline。
+- 每次重新显示都重新捕获并呈现一帧（unmap 后 surface 内容未定义）；显示时把当前真实指针位置同步给游戏一次，避免悬停状态停留在旧位置。多屏时 root 指针坐标要减去当前显示器原点，再映射到 overlay 局部坐标。
+- 不要用 `XFixesHideCursor`（这是整个 X server 级别）；保持系统光标。
+- 用 Vulkan swapchain（Xlib surface）呈现。双线性路径用 `vkCmdBlitImage`；Anime4K 路径用 compute + Lanczos graphics pass。
 - 覆盖任务栏/面板是预期行为；停止/退出/崩溃时必须销毁窗口。
 
 ### 6.3 输入
 
-**不能只靠点击穿透。** 1280×720 的游戏窗口 + 3840×2160 overlay：空 input shape 会把屏幕中央的点击透传到原游戏窗口之外，游戏收不到。
+**不能只靠点击穿透。** 1280×720 的游戏窗口 + 4K overlay：空 input shape 会把屏幕中央的点击透传到原游戏窗口之外，游戏收不到。
 
-M0a 做法：
+当前做法：
 
 - overlay 的 input shape 保持完整，接收真实 `MotionNotify` / `ButtonPress` / `ButtonRelease`；
-- 用输出内容矩形（fit 时扣除黑边）反算源窗口客户区坐标；
+- 用输出内容矩形（fit 时扣除黑边）反算源窗口客户区坐标；多屏时 overlay 事件本身是窗口局部坐标，只有 `XQueryPointer` 的 root 坐标需要减去显示器原点；
 - 通过 `XSendEvent` 向源窗口发送 `MotionNotify`、`ButtonPress`、`ButtonRelease`、滚轮（Button4/5）；不移动真实指针；
 - 指针进入/离开内容矩形时补发合成 `EnterNotify` / `LeaveNotify`（`NotifyNormal` / `NotifyNonlinear`）：overlay map 会让真实指针“离开”源窗口，部分引擎/工具包只靠 crossing 事件维护悬停状态；拖拽在内容矩形外松手时仍补发 release，避免按键卡住；
 - 键盘不转发：焦点由 6.2 的激活逻辑交还游戏，按键直接到游戏；
@@ -335,7 +339,7 @@ M0a 做法：
 
 XTest 在本机 XWayland 下受 KWin EIS 授权门控（会弹“允许操控输入设备”），且即使授权也要 warp 真实指针，不适合作为常规映射。XSendEvent 不需要权限框。
 
-M0 只支持视觉小说/2D 事件驱动输入；FPS/鼠标视角/raw input 不在范围内。
+M1 只支持视觉小说/2D 事件驱动输入；FPS/鼠标视角/raw input 放到后续阶段（见 backlog）。
 
 ### 6.4 超分
 
@@ -350,9 +354,9 @@ M0b 实际（v0.1.2）：
 - **Lanczos-2 收尾**：4×4 taps，从 2× 结果重采样到最终内容矩形；由 graphics pipeline 直接写入 swapchain，render pass 负责清黑边。这样不需要额外的 4K 中间纹理，也避免 format 不兼容的 `vkCmdBlitImage`。
 - **几何**：fit / stretch；fit 时先用源宽高比算出内容矩形，再把 2× 结果映射到该矩形。1024×768 fit → 2× 2048×1536 → Lanczos 到 2880×2160，居中 x=480。
 - **算法切换**：`EffectMode.Anime4K`（默认）/ `EffectMode.Bilinear`；UI“超分算法”下拉框，CLI `--effect anime4k|bilinear`。双线性路径保持 M0a 的单次 `vkCmdBlitImage`，用于对比和故障回退。
-- **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1）。Anime4K S 是效果/性能折中；M/L 变体后续可按同一管线接入。
+- **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1c）。Anime4K S 是效果/性能折中；M/L 变体在 M1b 把管线通用化后接入。
 
-未来的 effect 描述格式（M1，尚未实现）：
+未来的 effect 描述格式（M1c，尚未实现）：
 
 ```toml
 name = "anime4k-2x"
@@ -371,7 +375,7 @@ scaling = "normal"
 scale = [1.5, 1.5]
 ```
 
-### 6.5 配置与 Profile
+### 6.5 配置与 Profile（M1c）
 
 ```toml
 [profile.default]
@@ -385,7 +389,7 @@ pipeline = "anime4k-2x-soft"
 allow_windowed = true
 ```
 
-### 6.6 动画（M1）
+### 6.6 动画（M1c）
 
 覆盖窗口本身保持全屏不动，只对 GPU 侧的输出矩形做插值：
 
@@ -462,6 +466,18 @@ allow_windowed = true
 
 结论：Anime4K 路径在 4K 下有足够 GPU 余量；当前帧率主要受合成器/显示模式上限限制。真实游戏的画质与帧率仍需用户主观验收。
 
+### 7.7 M1a 本机实测（v0.2.0，2026-11-04）
+
+| 项 | 结果 |
+|---|---|
+| 多显示器枚举 | XRandR 1.5：HDMI-A-1 3840×2160+1800+489（primary）、DP-1 1800×2880+0+0 |
+| 1280×720 → DP-1 竖屏 fit | overlay 1800×2880+0+0；内容 1800×1012+0+934；合成测试约 46–50 fps |
+| 1280×720 → HDMI | overlay 3840×2160+1800+489；内容 3840×2160；合成测试约 41–44 fps（当前合成器上限） |
+| 自动选屏 | 窗口从 DP-1 移到 HDMI 再移回，overlay 分别重建为 1800×2880 和 3840×2160，输入/呈现正常 |
+| 手动选屏 | 窗口在 DP-1、`--monitor HDMI-A-1` 时 overlay 固定 HDMI，不跟随窗口 |
+| 单实例 | 第二 CLI 返回 4；第二 GUI 显示“已在运行”提示；`--status` 返回 pid/mode/session/monitor |
+| 退出 | `SIGTERM`、窗口关闭、游戏关闭后无残留进程/overlay |
+
 
 ---
 
@@ -471,13 +487,13 @@ allow_windowed = true
 |---|---|---|
 | 独占全屏窗口压不住 | 覆盖窗口无法置顶 | 本机实测 override-redirect 可盖住 EWMH 全屏窗口；独占 D3D 全屏仍需真实游戏验证 |
 | 弹窗检测误判 | 频繁让位，体验抖动 | 200ms 轮询 + viewable/尺寸过滤；后续补 XRes/`WM_TRANSIENT_FOR` |
-| 分数缩放下的坐标换算 | 位置偏移 | M0 实测 XWayland 1:1；overlay 用 root 物理尺寸，不依赖逻辑 2560×1440 |
-| 鼠标转发对 raw input 无效 | FPS/鼠标视角游戏不工作 | M0 只支持视觉小说/2D；raw input 需要另一套输入方案 |
+| 分数缩放下的坐标换算 | 位置偏移 | XWayland 每屏物理矩形由 XRandR 提供；overlay 用单屏物理尺寸，输入 root 坐标减屏原点；已用 150% + 100% 混合布局实测 |
+| 鼠标转发对 raw input 无效 | FPS/鼠标视角游戏不工作 | M1 只支持视觉小说/2D；raw input 放后续阶段，需要虚拟输入设备/合成器方案 |
 | 轮询 `GetCursorPos`/DirectInput 的游戏看不到合成指针 | 悬停高亮可能仍不触发（点击/滚轮正常） | 合成事件只能更新 X/Wine 的消息队列，真实指针仍在 overlay 上；除非 warp 真实指针或引入虚拟输入设备/合成器方案（M2），M0 不承诺这类悬停 |
-| 色彩空间 | 画面发灰或偏亮 | M0 测试关闭 HDR、假设 sRGB 直通；M1 加 linear 选项 |
-| 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | M0a 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出 |
+| 色彩空间 | HDR 游戏可能发灰或偏亮 | M1a 为 SDR 直通；HDR 桌面下 SDR 内容用户实测正常；HDR/linear 留 M2 |
+| 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出，M2 再评估 |
 | XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |
-| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限 |
+| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限；M1a 需要分别在一屏和双屏环境复测 |
 
 ### 未决问题
 

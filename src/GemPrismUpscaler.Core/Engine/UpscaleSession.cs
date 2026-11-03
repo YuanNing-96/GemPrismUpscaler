@@ -41,6 +41,9 @@ public sealed class UpscaleSession : IDisposable
     private Exception? _initError;
     private bool _focusedOnce;
     private bool _forceRedraw = true;
+    private List<MonitorInfo> _monitors = new();
+    private MonitorInfo? _monitor;
+    private string? _manualMonitorName;
     private int _screenWidth;
     private int _screenHeight;
     private string _exitReason = string.Empty;
@@ -50,9 +53,12 @@ public sealed class UpscaleSession : IDisposable
     public RectI DestRect { get; private set; }
     public ulong OverlayWindowId => _overlay?.Window ?? 0;
     public bool IsRunning => _thread is { IsAlive: true };
+    public bool IsOverlayVisible => _overlay?.IsVisible == true;
     public string OverlayTitle => "GemPrismOverlay";
     public string ExitReason => Volatile.Read(ref _exitReason);
     public string EffectName => _effect == EffectMode.Anime4K ? "anime4k" : "bilinear";
+    public MonitorInfo? Monitor => _monitor;
+    public string MonitorName => _monitor?.Name ?? string.Empty;
 
     /// <summary>
     /// Hide the overlay when the source window loses input focus (and restore it
@@ -61,11 +67,12 @@ public sealed class UpscaleSession : IDisposable
     public bool FollowFocus { get; set; } = true;
 
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
-        EffectMode effect = EffectMode.Anime4K)
+        EffectMode effect = EffectMode.Anime4K, string? monitorName = null)
     {
         _source = source;
         _mode = mode;
         _effect = effect;
+        _manualMonitorName = monitorName;
     }
 
     public void Start()
@@ -84,7 +91,12 @@ public sealed class UpscaleSession : IDisposable
         _stop = true;
         var t = _thread;
         if (t is not null && t.IsAlive && t != Thread.CurrentThread)
-            t.Join(TimeSpan.FromSeconds(8));
+        {
+            if (!t.Join(TimeSpan.FromSeconds(3)))
+                Emit("engine stop timed out; render thread will exit as a background thread");
+        }
+        if (string.IsNullOrWhiteSpace(ExitReason))
+            SetExitReason("stopped");
     }
 
     private void Run()
@@ -112,18 +124,30 @@ public sealed class UpscaleSession : IDisposable
         _display = new X11Display();
         _screenWidth = _display.Width;
         _screenHeight = _display.Height;
+        _monitors = X11MonitorEnumerator.List(_display);
 
-        var geometry = GetSourceGeometry();
+        var geometry = GetSourceBounds();
         if (geometry is null) throw new InvalidOperationException("source window is not readable");
-        DestRect = LayoutCalculator.ComputeDestRect(geometry.Value.Width, geometry.Value.Height,
-            _screenWidth, _screenHeight, _mode);
 
-        _overlay = new X11Overlay(_display, _screenWidth, _screenHeight);
+        _monitor = MonitorSelector.Select(_monitors, geometry.Value, _manualMonitorName);
+        if (_monitor is null) throw new InvalidOperationException("no XRandR monitor available");
+        if (!string.IsNullOrWhiteSpace(_manualMonitorName) &&
+            !string.Equals(_manualMonitorName, _monitor.Value.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            Emit($"preferred monitor '{_manualMonitorName}' not found; using {_monitor.Value.Name}");
+            _manualMonitorName = null;
+        }
+
+        DestRect = LayoutCalculator.ComputeDestRect(geometry.Value.Width, geometry.Value.Height,
+            _monitor.Value.Width, _monitor.Value.Height, _mode);
+
+        _overlay = new X11Overlay(_display, _monitor.Value.X, _monitor.Value.Y,
+            _monitor.Value.Width, _monitor.Value.Height);
         _capture = new X11Capture(_display, _source.WindowId, geometry.Value.Width, geometry.Value.Height);
         _damage = new X11Damage(_display, _source.WindowId);
         _input = new X11Input(_display, _source.WindowId);
         _hotkey = new X11Hotkey(_display);
-        _blitter = new VulkanBlitter(_display, _overlay.Window, _screenWidth, _screenHeight, _effect);
+        _blitter = new VulkanBlitter(_display, _overlay.Window, _monitor.Value.Width, _monitor.Value.Height, _effect);
 
         // Starting the upscaler from the config UI leaves focus on our window.
         // Give it back to the game so keyboard/hover/activation work immediately.
@@ -138,20 +162,34 @@ public sealed class UpscaleSession : IDisposable
         _focusedOnce = X11WindowProbe.IsFocused(_display, _source.WindowId);
 
         Emit($"engine started version={AppInfo.Version} effect={EffectName} source=0x{_source.WindowId:x} '{_source.Title}' " +
-             $"{geometry.Value.Width}x{geometry.Value.Height} screen={_screenWidth}x{_screenHeight} dest={DestRect} " +
+             $"{geometry.Value.Width}x{geometry.Value.Height} root={_screenWidth}x{_screenHeight} " +
+             $"monitor={_monitor.Value} dest={DestRect} " +
              $"device='{_blitter.DeviceName}' format={_blitter.SwapchainFormatName} " +
              $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} " +
              $"damage={_damage.Available} hotkey={_hotkey.IsGrabbed} focus={_focusedOnce} overlay=0x{_overlay.Window:x}");
     }
 
-    private (int Width, int Height)? GetSourceGeometry()
+    /// <summary>
+    /// Source window rectangle in X11 root coordinates. Used for popup/lifecycle
+    /// checks, display selection, and resize detection.
+    /// </summary>
+    private RectI? GetSourceBounds()
     {
         if (_display is null) return null;
         if (X11Native.XGetGeometry(_display.Handle, _source.WindowId, out _, out _, out _,
                 out uint width, out uint height, out _, out _) == 0)
             return null;
         if (width < 2 || height < 2) return null;
-        return ((int)width, (int)height);
+
+        int x = _source.X;
+        int y = _source.Y;
+        if (X11Native.XTranslateCoordinates(_display.Handle, _source.WindowId, _display.Root, 0, 0,
+                out int rootX, out int rootY, out _) != 0)
+        {
+            x = rootX;
+            y = rootY;
+        }
+        return new RectI(x, y, (int)width, (int)height);
     }
 
     private void Loop()
@@ -203,7 +241,7 @@ public sealed class UpscaleSession : IDisposable
             if (dirty)
             {
                 dirty = false;
-                var geom = GetSourceGeometry();
+                var geom = GetSourceBounds();
                 if (geom is null)
                 {
                     SetExitReason("source window closed");
@@ -213,7 +251,7 @@ public sealed class UpscaleSession : IDisposable
                 {
                     _capture.Recreate(geom.Value.Width, geom.Value.Height);
                     DestRect = LayoutCalculator.ComputeDestRect(geom.Value.Width, geom.Value.Height,
-                        _screenWidth, _screenHeight, _mode);
+                        _monitor?.Width ?? _screenWidth, _monitor?.Height ?? _screenHeight, _mode);
                     Emit($"source resized to {geom.Value.Width}x{geom.Value.Height} dest={DestRect}");
                 }
 
@@ -316,7 +354,7 @@ public sealed class UpscaleSession : IDisposable
     {
         get
         {
-            var g = GetSourceGeometry();
+            var g = GetSourceBounds();
             return g is null
                 ? new CoordinateMapper(DestRect, Math.Max(1, _capture?.Width ?? 1), Math.Max(1, _capture?.Height ?? 1))
                 : new CoordinateMapper(DestRect, g.Value.Width, g.Value.Height);
@@ -337,6 +375,14 @@ public sealed class UpscaleSession : IDisposable
             SetExitReason("game window closed");
             return false;
         }
+
+        var bounds = GetSourceBounds();
+        if (bounds is null)
+        {
+            SetExitReason("source window closed");
+            return false;
+        }
+        UpdateMonitor(bounds.Value);
 
         bool suspended = !state.Viewable || state.Hidden;
         bool resumed = _visibility.SourceSuspended && !suspended;
@@ -367,6 +413,81 @@ public sealed class UpscaleSession : IDisposable
 
         ApplyVisibility();
         return true;
+    }
+
+    /// <summary>
+    /// Re-evaluates the target monitor. In auto mode the overlay follows the
+    /// game window across screens; in manual mode it stays on the selected
+    /// monitor unless that monitor disappears.
+    /// </summary>
+    private void UpdateMonitor(RectI bounds)
+    {
+        if (_display is null) return;
+
+        List<MonitorInfo> monitors;
+        try { monitors = X11MonitorEnumerator.List(_display); }
+        catch (Exception ex)
+        {
+            Emit($"monitor scan error: {ex.Message}");
+            return;
+        }
+        if (monitors.Count == 0) return;
+        _monitors = monitors;
+
+        MonitorInfo? selected;
+        if (!string.IsNullOrWhiteSpace(_manualMonitorName))
+        {
+            selected = MonitorSelector.Select(monitors, bounds, _manualMonitorName);
+            if (selected is null ||
+                !string.Equals(selected.Value.Name, _manualMonitorName, StringComparison.OrdinalIgnoreCase))
+            {
+                Emit($"selected monitor '{_manualMonitorName}' is no longer available; switching to auto");
+                _manualMonitorName = null;
+                selected = MonitorSelector.Select(monitors, bounds);
+            }
+        }
+        else
+        {
+            selected = MonitorSelector.Select(monitors, bounds);
+        }
+
+        if (selected is null) return;
+        if (_monitor is { } current && current == selected.Value) return;
+        RebuildOutput(selected.Value);
+    }
+
+    /// <summary>
+    /// Recreates the X11 overlay and Vulkan swapchain for a different monitor
+    /// size/position. Called on the render thread only, so no present is in
+    /// flight while the old objects are destroyed.
+    /// </summary>
+    private void RebuildOutput(MonitorInfo monitor)
+    {
+        if (_display is null || _capture is null) return;
+
+        var previous = _monitor;
+        Emit($"output monitor changed {previous?.ToString() ?? "(none)"} -> {monitor}");
+
+        try { _blitter?.Dispose(); }
+        catch (Exception ex) { Emit($"dispose old blitter: {ex.Message}"); }
+        _blitter = null;
+
+        try { _overlay?.Dispose(); }
+        catch (Exception ex) { Emit($"dispose old overlay: {ex.Message}"); }
+        _overlay = null;
+
+        _monitor = monitor;
+        _overlay = new X11Overlay(_display, monitor.X, monitor.Y, monitor.Width, monitor.Height);
+        _blitter = new VulkanBlitter(_display, _overlay.Window, monitor.Width, monitor.Height, _effect);
+        DestRect = LayoutCalculator.ComputeDestRect(_capture.Width, _capture.Height,
+            monitor.Width, monitor.Height, _mode);
+
+        _input?.Reset();
+        _forceRedraw = true;
+        ApplyVisibility();
+        if (_overlay.IsVisible) SyncPointerToSource();
+        Emit($"output size {monitor.Width}x{monitor.Height} dest={DestRect} " +
+             $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height}");
     }
 
     private void TrackPopups()
@@ -435,7 +556,11 @@ public sealed class UpscaleSession : IDisposable
         if (X11Native.XQueryPointer(_display.Handle, _display.Root, out _, out _,
                 out int rootX, out int rootY, out _, out _, out _) == 0)
             return;
-        _input.ForwardMotion(rootX, rootY, Mapper);
+        // The pointer query is root-relative; ForwardMotion expects overlay-local
+        // coordinates, so subtract the monitor origin on multi-monitor desktops.
+        int localX = rootX - (_monitor?.X ?? 0);
+        int localY = rootY - (_monitor?.Y ?? 0);
+        _input.ForwardMotion(localX, localY, Mapper);
     }
 
     /// <summary>

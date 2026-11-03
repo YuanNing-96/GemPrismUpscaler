@@ -8,6 +8,7 @@ internal static unsafe class X11Native
     public const string X11 = "libX11.so.6";
     public const string Xext = "libXext.so.6";
     public const string Xdamage = "libXdamage.so.1";
+    public const string Xrandr = "libXrandr.so.2";
     public const string Libc = "libc.so.6";
 
     public const ulong AllPlanes = ulong.MaxValue;
@@ -198,6 +199,27 @@ internal static unsafe class X11Native
         public IntPtr Obdata;
     }
 
+    /// <summary>
+    /// XRRMonitorInfo from libXrandr 1.5. Layout on 64-bit:
+    /// Atom name (8), two Bool (8), int noutput/x/y/width/height/mwidth/mheight
+    /// (7*4 = 28), padding (4), RROutput* outputs (8) => 56 bytes.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XRRMonitorInfo
+    {
+        public ulong Name;
+        public int Primary;
+        public int Automatic;
+        public int NOutput;
+        public int X;
+        public int Y;
+        public int Width;
+        public int Height;
+        public int MWidth;
+        public int MHeight;
+        public IntPtr Outputs;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct XSetWindowAttributes
     {
@@ -268,6 +290,7 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XPending(IntPtr display);
     [DllImport(X11)] public static extern int XNextEvent(IntPtr display, ref XEvent xevent);
     [DllImport(X11)] public static extern IntPtr XSetErrorHandler(XErrorHandler handler);
+    [DllImport(X11)] public static extern IntPtr XGetAtomName(IntPtr display, ulong atom);
     [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XEvent xevent);
     [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XCrossingEvent xevent);
     [DllImport(X11)] public static extern int XSendEvent(IntPtr display, ulong window, int propagate, long eventMask, ref XClientMessageEvent xevent);
@@ -290,6 +313,10 @@ internal static unsafe class X11Native
     [DllImport(Xdamage)] public static extern ulong XDamageCreate(IntPtr display, ulong drawable, int level);
     [DllImport(Xdamage)] public static extern void XDamageDestroy(IntPtr display, ulong damage);
     [DllImport(Xdamage)] public static extern void XDamageSubtract(IntPtr display, ulong damage, ulong repair, ulong parts);
+
+    [DllImport(Xrandr)] public static extern IntPtr XRRGetMonitors(IntPtr display, ulong window, int getActive, out int nmonitors);
+    [DllImport(Xrandr)] public static extern void XRRFreeMonitors(IntPtr monitors);
+    [DllImport(Xrandr)] public static extern int XRRSelectInput(IntPtr display, ulong window, int mask);
 
     [DllImport(Libc, EntryPoint = "shmget")] public static extern int shmget(int key, nuint size, int shmflg);
     [DllImport(Libc, EntryPoint = "shmat")] public static extern IntPtr shmat(int shmid, IntPtr shmaddr, int shmflg);

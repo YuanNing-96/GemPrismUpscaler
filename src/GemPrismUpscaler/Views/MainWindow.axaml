@@ -20,6 +20,12 @@
                     <ComboBoxItem Content="双线性（M0a）"/>
                 </ComboBox>
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="输出显示器" VerticalAlignment="Center" Foreground="#666"/>
+                <ComboBox x:Name="MonitorCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="300"/>
+                <TextBlock Text="自动=跟随游戏窗口；手动选择则固定输出到该屏"
+                           VerticalAlignment="Center" Foreground="#666" FontSize="11"/>
+            </StackPanel>
         </StackPanel>
         <ListBox Grid.Row="2" x:Name="WindowList" Margin="0,4"/>
         <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="0,8">

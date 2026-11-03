@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
+using GemPrismUpscaler.Core.Platform.Linux;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
 using System;
@@ -14,16 +15,26 @@ namespace GemPrismUpscaler.Views;
 public partial class MainWindow : Window
 {
     private readonly DispatcherTimer _watch = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private readonly SingleInstance? _instance;
     private UpscaleSession? _session;
     private List<WindowInfo> _windows = new();
+    private List<MonitorInfo> _monitors = new();
 
-    public MainWindow()
+    public MainWindow() : this(null)
+    {
+    }
+
+    public MainWindow(SingleInstance? instance)
     {
         InitializeComponent();
+        _instance = instance;
+        if (_instance is not null)
+            _instance.StatusProvider = BuildInstanceInfo;
+
         Title = $"宝石棱镜 {AppInfo.DisplayName}";
         RefreshButton.Click += (_, _) => RefreshWindows();
         StartButton.Click += (_, _) => StartSession();
-        StopButton.Click += (_, _) => StopSession();
+        StopButton.Click += (_, _) => StopSession("已停止");
         ExitButton.Click += (_, _) => Close();
         Opened += (_, _) =>
         {
@@ -31,28 +42,65 @@ public partial class MainWindow : Window
             _watch.Tick += (_, _) => WatchSession();
             _watch.Start();
         };
-        Closing += (_, _) => StopSession();
+        Closing += (_, _) =>
+        {
+            AppendLog("window closing");
+            StopSession("窗口关闭");
+        };
+        Closed += (_, _) => Log.Write($"ui closed pid={Environment.ProcessId}");
     }
+
+    private InstanceInfo BuildInstanceInfo() => new(
+        Environment.ProcessId,
+        "gui",
+        _instance?.StartedAt ?? DateTimeOffset.Now,
+        _session?.IsRunning == true,
+        _session?.MonitorName);
 
     private void RefreshWindows()
     {
         try
         {
             using var display = new X11Display();
+            _monitors = X11MonitorEnumerator.List(display);
+            PopulateMonitors();
+
+            ulong? previousId = (WindowList.SelectedItem as WindowInfo)?.WindowId;
             _windows = X11WindowEnumerator.List(display)
                 .Where(w => w.Pid != Environment.ProcessId)
                 .OrderByDescending(w => w.Width * w.Height)
                 .ToList();
+
             WindowList.ItemsSource = _windows;
-            if (_windows.Count > 0) WindowList.SelectedIndex = 0;
-            StatusText.Text = $"发现 {_windows.Count} 个窗口";
-            AppendLog($"refresh: {_windows.Count} windows");
+            WindowList.SelectedItem = previousId is { } id
+                ? _windows.FirstOrDefault(w => w.WindowId == id) ?? _windows.FirstOrDefault()
+                : _windows.FirstOrDefault();
+
+            StatusText.Text = $"发现 {_windows.Count} 个窗口 · {_monitors.Count} 台显示器";
+            AppendLog($"refresh: {_windows.Count} windows, {_monitors.Count} monitors");
+            foreach (var monitor in _monitors)
+                AppendLog($"monitor: {monitor}");
         }
         catch (Exception ex)
         {
             StatusText.Text = "X11 连接失败";
             AppendLog($"refresh error: {ex.Message}");
         }
+    }
+
+    private void PopulateMonitors()
+    {
+        string? previous = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
+        var choices = new List<MonitorChoice>
+        {
+            new(null, "自动（跟随游戏窗口）")
+        };
+        choices.AddRange(_monitors.Select(m => new MonitorChoice(
+            m.Name,
+            $"{m.Name} · {m.Width}×{m.Height}{(m.Primary ? "（主屏）" : string.Empty)}")));
+
+        MonitorCombo.ItemsSource = choices;
+        MonitorCombo.SelectedItem = choices.FirstOrDefault(c => c.Name == previous) ?? choices[0];
     }
 
     private void StartSession()
@@ -63,10 +111,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        StopSession();
+        StopSession("重新启动");
         var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
         var effect = EffectCombo.SelectedIndex == 1 ? EffectMode.Bilinear : EffectMode.Anime4K;
-        var session = new UpscaleSession(info, mode, effect)
+        string? monitorName = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
+        var session = new UpscaleSession(info, mode, effect, monitorName)
         {
             FollowFocus = FollowFocusCheck.IsChecked != false
         };
@@ -77,8 +126,11 @@ public partial class MainWindow : Window
             _session = session;
             StartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
-            StatusText.Text = $"运行中：{info.Title}（Alt+Shift+A 显示/隐藏）";
-            AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} mode={mode} effect={session.EffectName}");
+            StatusText.Text = $"运行中：{info.Title}（显示器：{session.MonitorName}，Alt+Shift+A 显示/隐藏）";
+            AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} " +
+                      $"mode={mode} effect={session.EffectName} monitor={session.MonitorName}");
+            Log.Write($"ui session started pid={Environment.ProcessId} window=0x{info.WindowId:x} " +
+                      $"monitor={session.MonitorName} effect={session.EffectName}");
         }
         catch (Exception ex)
         {
@@ -95,6 +147,7 @@ public partial class MainWindow : Window
         if (session is not null)
         {
             session.Message -= OnSessionMessage;
+            AppendLog($"stopping session ({status ?? "requested"})");
             try { session.Stop(); } catch (Exception ex) { AppendLog($"stop error: {ex.Message}"); }
             session.Dispose();
         }
@@ -136,5 +189,19 @@ public partial class MainWindow : Window
         if (lines.Length > 300) current = string.Join('\n', lines.Skip(lines.Length - 250));
         LogText.Text = current + text + "\n";
         LogText.CaretIndex = LogText.Text?.Length ?? 0;
+    }
+
+    private sealed class MonitorChoice
+    {
+        public MonitorChoice(string? name, string display)
+        {
+            Name = name;
+            Display = display;
+        }
+
+        public string? Name { get; }
+        public string Display { get; }
+
+        public override string ToString() => Display;
     }
 }

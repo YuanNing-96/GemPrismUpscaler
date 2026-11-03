@@ -6,17 +6,21 @@ public sealed class X11Overlay : IDisposable
     private bool _disposed;
 
     public ulong Window { get; }
+    public int X { get; }
+    public int Y { get; }
     public int Width { get; }
     public int Height { get; }
     public bool IsVisible { get; private set; }
 
-    public X11Overlay(X11Display display, int width, int height)
+    public X11Overlay(X11Display display, int x, int y, int width, int height)
     {
         _display = display;
+        X = x;
+        Y = y;
         Width = width;
         Height = height;
 
-        Window = X11Native.XCreateSimpleWindow(display.Handle, display.Root, 0, 0, (uint)width, (uint)height,
+        Window = X11Native.XCreateSimpleWindow(display.Handle, display.Root, x, y, (uint)width, (uint)height,
             0, 0, 0);
         if (Window == 0) throw new InvalidOperationException("XCreateSimpleWindow failed");
 

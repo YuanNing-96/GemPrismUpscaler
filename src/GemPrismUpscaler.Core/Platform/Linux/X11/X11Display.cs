@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using GemPrismUpscaler.Core.Diagnostics;
+using GemPrismUpscaler.Core.Geometry;
 
 namespace GemPrismUpscaler.Core.Platform.Linux.X11;
 
@@ -24,6 +25,9 @@ public sealed class X11Display : IDisposable
     public ulong AtomNetWmState { get; }
     public ulong AtomNetWmStateHidden { get; }
     public ulong AtomNetActiveWindow { get; }
+    public ulong AtomNetWmWindowType { get; }
+    public ulong AtomNetWmWindowTypeDock { get; }
+    public ulong AtomNetWmWindowTypeDesktop { get; }
 
     public X11Display(string? name = null)
     {
@@ -46,6 +50,9 @@ public sealed class X11Display : IDisposable
         AtomNetWmState = X11Native.XInternAtom(Handle, "_NET_WM_STATE", 0);
         AtomNetWmStateHidden = X11Native.XInternAtom(Handle, "_NET_WM_STATE_HIDDEN", 0);
         AtomNetActiveWindow = X11Native.XInternAtom(Handle, "_NET_ACTIVE_WINDOW", 0);
+        AtomNetWmWindowType = X11Native.XInternAtom(Handle, "_NET_WM_WINDOW_TYPE", 0);
+        AtomNetWmWindowTypeDock = X11Native.XInternAtom(Handle, "_NET_WM_WINDOW_TYPE_DOCK", 0);
+        AtomNetWmWindowTypeDesktop = X11Native.XInternAtom(Handle, "_NET_WM_WINDOW_TYPE_DESKTOP", 0);
     }
 
     public static int LastError => Volatile.Read(ref _lastError);
@@ -85,8 +92,14 @@ public sealed record WindowInfo(
     int Width,
     int Height)
 {
-    public override string ToString() =>
-        $"{Title} [{Width}x{Height}] pid={Pid} 0x{WindowId:x}";
+    public string MonitorName { get; init; } = string.Empty;
+
+    public override string ToString()
+    {
+        var monitor = string.IsNullOrWhiteSpace(MonitorName) ? string.Empty : $" @{MonitorName}";
+        var cls = string.IsNullOrWhiteSpace(ClassName) ? string.Empty : $" [{ClassName}]";
+        return $"{Title} [{Width}x{Height}] pid={Pid} 0x{WindowId:x}{cls}{monitor}";
+    }
 }
 
 public static class X11WindowEnumerator
@@ -94,11 +107,14 @@ public static class X11WindowEnumerator
     public static List<WindowInfo> List(X11Display display)
     {
         var result = new List<WindowInfo>();
+        var monitors = X11MonitorEnumerator.List(display);
         foreach (var id in GetClientWindows(display))
         {
             var info = TryRead(display, id);
-            if (info is not null)
-                result.Add(info);
+            if (info is null) continue;
+            var monitor = MonitorSelector.Select(monitors, new RectI(info.X, info.Y, info.Width, info.Height));
+            if (monitor is not null) info = info with { MonitorName = monitor.Value.Name };
+            result.Add(info);
         }
         return result;
     }
@@ -150,8 +166,27 @@ public static class X11WindowEnumerator
         // XWayland/KWin internal windows have no PID/title/class; don't show them.
         if (pid == 0 && title == "(untitled)" && string.IsNullOrWhiteSpace(cls))
             return null;
+        // Panels and the desktop are useful to exclude from the game picker.
+        ulong type = GetWindowType(display, id);
+        if (type != 0 && (type == display.AtomNetWmWindowTypeDock || type == display.AtomNetWmWindowTypeDesktop))
+            return null;
 
         return new WindowInfo(id, title, cls, pid, x, y, (int)width, (int)height);
+    }
+
+    private static ulong GetWindowType(X11Display display, ulong id)
+    {
+        if (!TryGetProperty(display, id, display.AtomNetWmWindowType, 0, 16, out var prop, out var nitems, out var format))
+            return 0;
+        try
+        {
+            if (format != 32 || prop == IntPtr.Zero || nitems == 0) return 0;
+            return (ulong)Marshal.ReadInt64(prop);
+        }
+        finally
+        {
+            if (prop != IntPtr.Zero) X11Native.XFree(prop);
+        }
     }
 
     public static int GetPid(X11Display display, ulong id)

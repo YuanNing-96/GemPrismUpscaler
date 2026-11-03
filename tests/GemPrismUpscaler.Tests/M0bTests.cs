@@ -7,10 +7,10 @@ namespace GemPrismUpscaler.Tests;
 public class M0bTests
 {
     [Fact]
-    public void VersionIs012()
+    public void VersionIs020()
     {
-        Assert.Equal("0.1.2", AppInfo.Version);
-        Assert.Equal("GemPrismUpscaler v0.1.2", AppInfo.DisplayName);
+        Assert.Equal("0.2.0", AppInfo.Version);
+        Assert.Equal("GemPrismUpscaler v0.2.0", AppInfo.DisplayName);
     }
 
     [Theory]
