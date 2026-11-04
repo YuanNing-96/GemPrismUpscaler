@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -57,11 +58,28 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private ImageLayout _sourceLayout = ImageLayout.Undefined;
     private Anime4KChain? _anime4k;
     private LanczosPresenter? _presenter;
+    private QueryPool _timestampPool;
+    private bool _timestampsAvailable;
+    private float _timestampPeriodNs;
+    private bool _hasPendingTimestamps;
+    private double _lastGpuUploadMs;
+    private double _lastGpuEffectMs;
+    private double _lastGpuTailMs;
+    private bool _lastGpuValid;
     private bool _disposed;
 
     public string DeviceName { get; private set; } = "?";
     public string SwapchainFormatName => _swapchainFormat.ToString();
     public Extent2D SwapchainExtent => _swapchainExtent;
+
+    public double LastUploadCpuMs { get; private set; }
+    public double LastEffectCpuMs { get; private set; }
+    public double LastPresentCpuMs { get; private set; }
+    public double LastTotalCpuMs { get; private set; }
+    public double LastGpuUploadMs => _lastGpuUploadMs;
+    public double LastGpuEffectMs => _lastGpuEffectMs;
+    public double LastGpuTailMs => _lastGpuTailMs;
+    public bool LastGpuTimingsValid => _lastGpuValid;
 
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
         EffectMode effect = EffectMode.Anime4KS)
@@ -77,6 +95,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CreateDevice();
         CreateSwapchain();
         CreateSyncAndCommands();
+        CreateTimestampPool();
         CreateStagingBuffer();
         if (_effect.IsAnime4K())
         {
@@ -390,6 +409,67 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Check(_vk.AllocateCommandBuffers(_device, &alloc, out _commandBuffer), "AllocateCommandBuffers");
     }
 
+    /// <summary>
+    /// Advances per-stage GPU timing. Four timestamps per frame are enough:
+    /// frame start, after source upload, after effect/presenter, command end.
+    /// The values are read at the next Render after the fence has signaled.
+    /// </summary>
+    private void CreateTimestampPool()
+    {
+        uint count = 0;
+        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &count, null);
+        if (count == 0) return;
+
+        var properties = stackalloc QueueFamilyProperties[(int)count];
+        _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &count, properties);
+        if (_queueFamily >= count || properties[(int)_queueFamily].TimestampValidBits == 0)
+            return;
+
+        _vk.GetPhysicalDeviceProperties(_physicalDevice, out var deviceProperties);
+        _timestampPeriodNs = deviceProperties.Limits.TimestampPeriod;
+
+        var info = new QueryPoolCreateInfo
+        {
+            SType = StructureType.QueryPoolCreateInfo,
+            QueryType = QueryType.Timestamp,
+            QueryCount = 4
+        };
+        if (_vk.CreateQueryPool(_device, &info, null, out _timestampPool) != Result.Success)
+        {
+            _timestampPool = default;
+            return;
+        }
+        _timestampsAvailable = true;
+    }
+
+    private void ReadGpuTimestamps()
+    {
+        if (!_timestampsAvailable || !_hasPendingTimestamps) return;
+        _hasPendingTimestamps = false;
+
+        ulong* data = stackalloc ulong[4];
+        Result result = _vk.GetQueryPoolResults(_device, _timestampPool, 0, 4,
+            (nuint)(4 * sizeof(ulong)), data, sizeof(ulong),
+            QueryResultFlags.Result64Bit | QueryResultFlags.ResultWaitBit);
+        if (result != Result.Success || data[1] < data[0] || data[2] < data[1] || data[3] < data[2])
+        {
+            _lastGpuValid = false;
+            return;
+        }
+
+        double millisecondsPerTick = _timestampPeriodNs / 1_000_000.0;
+        _lastGpuUploadMs = (data[1] - data[0]) * millisecondsPerTick;
+        _lastGpuEffectMs = (data[2] - data[1]) * millisecondsPerTick;
+        _lastGpuTailMs = (data[3] - data[2]) * millisecondsPerTick;
+        _lastGpuValid = true;
+    }
+
+    private void WriteTimestamp(PipelineStageFlags stage, uint index)
+    {
+        if (_timestampsAvailable)
+            _vk.CmdWriteTimestamp(_commandBuffer, stage, _timestampPool, index);
+    }
+
     private void CreateStagingBuffer()
     {
         // Buffer is sized for the maximum expected source; recreated on resize.
@@ -501,9 +581,11 @@ public sealed unsafe class VulkanBlitter : IDisposable
     public void Render(ReadOnlySpan<byte> frame, int width, int height, int stride, RectI destRect)
     {
         if (frame.Length < stride * height) throw new ArgumentException("frame buffer too small");
+        var totalClock = Stopwatch.StartNew();
 
         var inFlight = _inFlight;
         Check(_vk.WaitForFences(_device, 1, &inFlight, true, 2_000_000_000), "WaitForFences");
+        ReadGpuTimestamps();
         EnsureSource(width, height);
         _vk.ResetFences(_device, 1, &inFlight);
 
@@ -513,7 +595,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (acquire != Result.Success && acquire != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkAcquireNextImageKHR failed: {acquire}");
 
+        var uploadClock = Stopwatch.StartNew();
         CopyToStaging(frame, width, height, stride);
+        LastUploadCpuMs = uploadClock.Elapsed.TotalMilliseconds;
 
         var begin = new CommandBufferBeginInfo
         {
@@ -522,16 +606,25 @@ public sealed unsafe class VulkanBlitter : IDisposable
         };
         Check(_vk.BeginCommandBuffer(_commandBuffer, &begin), "BeginCommandBuffer");
 
+        var effectClock = Stopwatch.StartNew();
+        if (_timestampsAvailable)
+            _vk.CmdResetQueryPool(_commandBuffer, _timestampPool, 0, 4);
+        WriteTimestamp(PipelineStageFlags.TopOfPipeBit, 0);
+
         if (_effect == EffectMode.Bilinear)
             RecordBilinear(imageIndex, width, height, destRect);
         else
             RecordAnime4K(imageIndex, width, height, destRect);
 
+        WriteTimestamp(PipelineStageFlags.BottomOfPipeBit, 3);
         Check(_vk.EndCommandBuffer(_commandBuffer), "EndCommandBuffer");
+        LastEffectCpuMs = effectClock.Elapsed.TotalMilliseconds;
+        _hasPendingTimestamps = _timestampsAvailable;
 
         var waitStage = _effect.IsAnime4K()
             ? PipelineStageFlags.TransferBit | PipelineStageFlags.ComputeShaderBit | PipelineStageFlags.ColorAttachmentOutputBit
             : PipelineStageFlags.TransferBit;
+        var presentClock = Stopwatch.StartNew();
         var cb = _commandBuffer;
         var renderFinished = _renderSemaphores[imageIndex];
         var submit = new SubmitInfo
@@ -560,6 +653,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Result pr = _swapchainExt.QueuePresent(_queue, &present);
         if (pr != Result.Success && pr != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkQueuePresentKHR failed: {pr}");
+        LastPresentCpuMs = presentClock.Elapsed.TotalMilliseconds;
+        LastTotalCpuMs = totalClock.Elapsed.TotalMilliseconds;
     }
 
     private void RecordBilinear(uint imageIndex, int width, int height, RectI destRect)
@@ -595,6 +690,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CopySourceImage(width, height, ImageLayout.TransferDstOptimal);
         TransitionImage(_sourceImage, ImageLayout.TransferDstOptimal, ImageLayout.TransferSrcOptimal, fullRange);
         _sourceLayout = ImageLayout.TransferSrcOptimal;
+        WriteTimestamp(PipelineStageFlags.TransferBit, 1);
 
         var blit = new ImageBlit
         {
@@ -615,6 +711,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         blit.DstOffsets.Element1 = new Offset3D(destRect.Right, destRect.Bottom, 1);
         _vk.CmdBlitImage(_commandBuffer, _sourceImage, ImageLayout.TransferSrcOptimal,
             _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
+        WriteTimestamp(PipelineStageFlags.TransferBit, 2);
 
         TransitionImage(_swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr, fullRange);
     }
@@ -638,10 +735,12 @@ public sealed unsafe class VulkanBlitter : IDisposable
         VulkanUtil.ImageBarrier(_vk, _commandBuffer, _sourceImage, ImageLayout.General, ImageLayout.General,
             AccessFlags.TransferWriteBit, AccessFlags.ShaderReadBit,
             PipelineStageFlags.TransferBit, PipelineStageFlags.ComputeShaderBit);
+        WriteTimestamp(PipelineStageFlags.TransferBit, 1);
 
         _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height, _effect);
         _presenter!.SetSource(_anime4k.OutputView);
         _anime4k.Record(_commandBuffer, new RectI(0, 0, width, height));
+        WriteTimestamp(PipelineStageFlags.ComputeShaderBit, 2);
 
         bool firstUse = _swapchainFirstUse[imageIndex];
         _swapchainFirstUse[imageIndex] = false;
@@ -744,6 +843,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
             if (_stagingMemory.Handle != 0) _vk.FreeMemory(_device, _stagingMemory, null);
             if (_sourceImage.Handle != 0) _vk.DestroyImage(_device, _sourceImage, null);
             if (_sourceMemory.Handle != 0) _vk.FreeMemory(_device, _sourceMemory, null);
+            if (_timestampPool.Handle != 0) _vk.DestroyQueryPool(_device, _timestampPool, null);
             if (_commandPool.Handle != 0) _vk.DestroyCommandPool(_device, _commandPool, null);
             if (_inFlight.Handle != 0) _vk.DestroyFence(_device, _inFlight, null);
             if (_imageAvailable.Handle != 0) _vk.DestroySemaphore(_device, _imageAvailable, null);

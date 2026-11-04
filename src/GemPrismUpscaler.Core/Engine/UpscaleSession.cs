@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
@@ -255,6 +256,7 @@ public sealed class UpscaleSession : IDisposable
                     Emit($"source resized to {geom.Value.Width}x{geom.Value.Height} dest={DestRect}");
                 }
 
+                var captureClock = Stopwatch.StartNew();
                 if (!_capture.TryCapture())
                 {
                     captureFailures++;
@@ -268,10 +270,21 @@ public sealed class UpscaleSession : IDisposable
                 {
                     captureFailures = 0;
                     stats.OnCaptured();
+                    double captureMs = captureClock.Elapsed.TotalMilliseconds;
                     try
                     {
                         _blitter.Render(_capture.Buffer, _capture.Width, _capture.Height, _capture.Stride, DestRect);
                         stats.OnPresented();
+                        stats.OnFrame(new FrameTimings(
+                            captureMs,
+                            _blitter.LastUploadCpuMs,
+                            _blitter.LastEffectCpuMs,
+                            _blitter.LastPresentCpuMs,
+                            _blitter.LastTotalCpuMs,
+                            _blitter.LastGpuUploadMs,
+                            _blitter.LastGpuEffectMs,
+                            _blitter.LastGpuTailMs,
+                            _blitter.LastGpuTimingsValid));
                     }
                     catch (Exception ex)
                     {
@@ -283,7 +296,11 @@ public sealed class UpscaleSession : IDisposable
 
             var report = stats.Tick();
             if (report is not null)
-                Emit($"stats {report} hidden={_overlay.IsVisible == false} popup={_visibility.PopupHidden} userHidden={_visibility.UserHidden}");
+            {
+                Emit($"stats {report.ToLogString()} hidden={_overlay.IsVisible == false} " +
+                     $"popup={_visibility.PopupHidden} userHidden={_visibility.UserHidden}");
+                StatsCsv.TryWrite(report);
+            }
 
             Thread.Sleep(2);
         }
