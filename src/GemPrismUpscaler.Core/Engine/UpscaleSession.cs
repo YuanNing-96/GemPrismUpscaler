@@ -42,9 +42,12 @@ public sealed class UpscaleSession : IDisposable
     private Exception? _initError;
     private bool _focusedOnce;
     private bool _forceRedraw = true;
+    private readonly FrameDiff _diff = new();
     private List<MonitorInfo> _monitors = new();
     private MonitorInfo? _monitor;
     private string? _manualMonitorName;
+    private readonly int _outputWidthOverride;
+    private readonly int _outputHeightOverride;
     private int _screenWidth;
     private int _screenHeight;
     private string _exitReason = string.Empty;
@@ -67,13 +70,19 @@ public sealed class UpscaleSession : IDisposable
     /// </summary>
     public bool FollowFocus { get; set; } = true;
 
+    /// <summary>Dirty-tile rendering; can be disabled for A/B and fallback.</summary>
+    public bool DirtyRectEnabled { get; set; } = true;
+
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
-        EffectMode effect = EffectMode.Anime4KS, string? monitorName = null)
+        EffectMode effect = EffectMode.Anime4KS, string? monitorName = null,
+        int outputWidthOverride = 0, int outputHeightOverride = 0)
     {
         _source = source;
         _mode = mode;
         _effect = effect;
         _manualMonitorName = monitorName;
+        _outputWidthOverride = outputWidthOverride;
+        _outputHeightOverride = outputHeightOverride;
     }
 
     public void Start()
@@ -130,13 +139,21 @@ public sealed class UpscaleSession : IDisposable
         var geometry = GetSourceBounds();
         if (geometry is null) throw new InvalidOperationException("source window is not readable");
 
-        _monitor = MonitorSelector.Select(_monitors, geometry.Value, _manualMonitorName);
-        if (_monitor is null) throw new InvalidOperationException("no XRandR monitor available");
-        if (!string.IsNullOrWhiteSpace(_manualMonitorName) &&
-            !string.Equals(_manualMonitorName, _monitor.Value.Name, StringComparison.OrdinalIgnoreCase))
+        if (_outputWidthOverride > 0 && _outputHeightOverride > 0)
         {
-            Emit($"preferred monitor '{_manualMonitorName}' not found; using {_monitor.Value.Name}");
-            _manualMonitorName = null;
+            _monitor = new MonitorInfo("benchmark", 0, 0, _outputWidthOverride, _outputHeightOverride, true);
+            Emit($"output size override {_outputWidthOverride}x{_outputHeightOverride}");
+        }
+        else
+        {
+            _monitor = MonitorSelector.Select(_monitors, geometry.Value, _manualMonitorName);
+            if (_monitor is null) throw new InvalidOperationException("no XRandR monitor available");
+            if (!string.IsNullOrWhiteSpace(_manualMonitorName) &&
+                !string.Equals(_manualMonitorName, _monitor.Value.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                Emit($"preferred monitor '{_manualMonitorName}' not found; using {_monitor.Value.Name}");
+                _manualMonitorName = null;
+            }
         }
 
         DestRect = LayoutCalculator.ComputeDestRect(geometry.Value.Width, geometry.Value.Height,
@@ -220,6 +237,7 @@ public sealed class UpscaleSession : IDisposable
             if (_forceRedraw)
             {
                 _forceRedraw = false;
+                _diff.Reset();
                 dirty = true;
             }
 
@@ -253,12 +271,16 @@ public sealed class UpscaleSession : IDisposable
                     _capture.Recreate(geom.Value.Width, geom.Value.Height);
                     DestRect = LayoutCalculator.ComputeDestRect(geom.Value.Width, geom.Value.Height,
                         _monitor?.Width ?? _screenWidth, _monitor?.Height ?? _screenHeight, _mode);
+                    _diff.Reset();
                     Emit($"source resized to {geom.Value.Width}x{geom.Value.Height} dest={DestRect}");
                 }
 
                 var captureClock = Stopwatch.StartNew();
-                if (!_capture.TryCapture())
+                bool captured = _capture.TryCapture();
+                double captureMs = captureClock.Elapsed.TotalMilliseconds;
+                if (!captured)
                 {
+                    _diff.Reset();
                     captureFailures++;
                     if (captureFailures > 30)
                     {
@@ -270,26 +292,41 @@ public sealed class UpscaleSession : IDisposable
                 {
                     captureFailures = 0;
                     stats.OnCaptured();
-                    double captureMs = captureClock.Elapsed.TotalMilliseconds;
-                    try
+
+                    DirtyFrame? dirtyFrame = null;
+                    double diffMs = 0;
+                    if (DirtyRectEnabled && _effect.IsAnime4K())
                     {
-                        _blitter.Render(_capture.Buffer, _capture.Width, _capture.Height, _capture.Stride, DestRect);
-                        stats.OnPresented();
-                        stats.OnFrame(new FrameTimings(
-                            captureMs,
-                            _blitter.LastUploadCpuMs,
-                            _blitter.LastEffectCpuMs,
-                            _blitter.LastPresentCpuMs,
-                            _blitter.LastTotalCpuMs,
-                            _blitter.LastGpuUploadMs,
-                            _blitter.LastGpuEffectMs,
-                            _blitter.LastGpuTailMs,
-                            _blitter.LastGpuTimingsValid));
+                        var diffClock = Stopwatch.StartNew();
+                        dirtyFrame = _diff.Update(_capture.Pixels, _capture.Width, _capture.Height,
+                            _capture.Stride, DestRect, _blitter.DirtyHalo + 2);
+                        diffMs = diffClock.Elapsed.TotalMilliseconds;
                     }
-                    catch (Exception ex)
+
+                    if (dirtyFrame is not { IsStatic: true })
                     {
-                        SetExitReason($"present error: {ex.GetType().Name}: {ex.Message}");
-                        break;
+                        try
+                        {
+                            _blitter.Render(_capture.Pixels, _capture.Width, _capture.Height, _capture.Stride,
+                                DestRect, dirtyFrame);
+                            stats.OnPresented();
+                            stats.OnFrame(new FrameTimings(
+                                captureMs,
+                                diffMs,
+                                _blitter.LastUploadCpuMs,
+                                _blitter.LastEffectCpuMs,
+                                _blitter.LastPresentCpuMs,
+                                _blitter.LastTotalCpuMs,
+                                _blitter.LastGpuUploadMs,
+                                _blitter.LastGpuEffectMs,
+                                _blitter.LastGpuTailMs,
+                                _blitter.LastGpuTimingsValid));
+                        }
+                        catch (Exception ex)
+                        {
+                            SetExitReason($"present error: {ex.GetType().Name}: {ex.Message}");
+                            break;
+                        }
                     }
                 }
             }
@@ -440,6 +477,7 @@ public sealed class UpscaleSession : IDisposable
     private void UpdateMonitor(RectI bounds)
     {
         if (_display is null) return;
+        if (_outputWidthOverride > 0 && _outputHeightOverride > 0) return;
 
         List<MonitorInfo> monitors;
         try { monitors = X11MonitorEnumerator.List(_display); }
@@ -500,6 +538,7 @@ public sealed class UpscaleSession : IDisposable
             monitor.Width, monitor.Height, _mode);
 
         _input?.Reset();
+        _diff.Reset();
         _forceRedraw = true;
         ApplyVisibility();
         if (_overlay.IsVisible) SyncPointerToSource();
@@ -551,6 +590,7 @@ public sealed class UpscaleSession : IDisposable
         if (show)
         {
             _forceRedraw = true;
+            _diff.Reset();
             _overlay.Show();
             SyncPointerToSource();
             Emit("overlay shown");

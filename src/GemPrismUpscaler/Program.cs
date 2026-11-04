@@ -167,9 +167,20 @@ sealed class Program
                     Console.Error.WriteLine(effectError);
                     return 2;
                 }
-                session = new UpscaleSession(info, mode, effect, monitorName)
+
+                int outputWidth = 0, outputHeight = 0;
+                string? outputSize = GetOption(args, "--output-size");
+                if (!string.IsNullOrWhiteSpace(outputSize) &&
+                    !TryParseSize(outputSize, out outputWidth, out outputHeight))
                 {
-                    FollowFocus = !args.Any(a => a == "--no-follow-focus")
+                    Console.Error.WriteLine($"invalid --output-size '{outputSize}'; expected WxH");
+                    return 2;
+                }
+
+                session = new UpscaleSession(info, mode, effect, monitorName, outputWidth, outputHeight)
+                {
+                    FollowFocus = !args.Any(a => a == "--no-follow-focus"),
+                    DirtyRectEnabled = !args.Any(a => a == "--no-dirty-rect")
                 };
                 session.Message += m => Console.WriteLine(m);
 
@@ -223,6 +234,8 @@ sealed class Program
                                         default anime4k-s; 'anime4k' is an alias for s
               --stretch                 stretch instead of preserving aspect ratio
               --no-follow-focus         keep the overlay when the game loses focus
+              --no-dirty-rect           disable dirty-tile rendering (A/B baseline)
+              --output-size <WxH>       debug/benchmark output override (e.g. 3840x2160)
             """);
     }
 
@@ -230,6 +243,17 @@ sealed class Program
     {
         int index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    private static bool TryParseSize(string value, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        string[] parts = value.Split('x', 'X');
+        if (parts.Length != 2) return false;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out width)) return false;
+        if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out height)) return false;
+        return width is >= 320 and <= 16384 && height is >= 240 and <= 16384;
     }
 
     private static bool TryEffectFromArgs(string[] args, out EffectMode effect, out string? error)

@@ -414,35 +414,64 @@ internal sealed unsafe class Anime4KChain : IDisposable
     public void Record(CommandBuffer cmd, RectI sourceRegion)
     {
         EnsureImagesInitialized(cmd);
-
         byte* push = stackalloc byte[_pushSize];
         for (int i = 0; i < _variant.Passes.Count; i++)
         {
-            var pass = _variant.Passes[i];
-            int fullWidth = _sourceWidth * pass.OutputScale;
-            int fullHeight = _sourceHeight * pass.OutputScale;
-            var region = ScaleAndClamp(sourceRegion, pass.OutputScale, fullWidth, fullHeight);
-            if (region.Width <= 0 || region.Height <= 0) continue;
-
-            _vk.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[i]);
-            var set = _sets[i];
-            _vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayouts[i], 0, 1, &set, 0, null);
-
-            WritePushConstants(push, pass, region, fullWidth, fullHeight);
-            _vk.CmdPushConstants(cmd, _pipelineLayouts[i], ShaderStageFlags.ComputeBit, 0,
-                (uint)_pushSize, push);
-
-            uint groupsX = (uint)((region.Width + 7) / 8);
-            uint groupsY = (uint)((region.Height + 7) / 8);
-            _vk.CmdDispatch(cmd, groupsX, groupsY, 1);
-
-            var output = ResolveImage(pass.Output);
-            bool final = i == _variant.Passes.Count - 1;
-            VulkanUtil.ImageBarrier(_vk, cmd, output, ImageLayout.General, ImageLayout.General,
-                AccessFlags.ShaderWriteBit, AccessFlags.ShaderReadBit,
-                PipelineStageFlags.ComputeShaderBit,
-                final ? PipelineStageFlags.FragmentShaderBit : PipelineStageFlags.ComputeShaderBit);
+            if (DispatchPass(cmd, i, sourceRegion, push))
+                BarrierOutput(cmd, i);
         }
+    }
+
+    /// <summary>
+    /// Records the chain for several disjoint source-space rectangles. Used by
+    /// the dirty-rectangle path; each pass is bound once per rectangle and the
+    /// output barrier is emitted once after all rectangles of that pass.
+    /// </summary>
+    public void Record(CommandBuffer cmd, IReadOnlyList<RectI> sourceRegions)
+    {
+        if (sourceRegions.Count == 0) return;
+        EnsureImagesInitialized(cmd);
+        byte* push = stackalloc byte[_pushSize];
+        for (int i = 0; i < _variant.Passes.Count; i++)
+        {
+            bool dispatched = false;
+            foreach (var sourceRegion in sourceRegions)
+                if (DispatchPass(cmd, i, sourceRegion, push))
+                    dispatched = true;
+            if (dispatched) BarrierOutput(cmd, i);
+        }
+    }
+
+    private bool DispatchPass(CommandBuffer cmd, int passIndex, RectI sourceRegion, byte* push)
+    {
+        var pass = _variant.Passes[passIndex];
+        int fullWidth = _sourceWidth * pass.OutputScale;
+        int fullHeight = _sourceHeight * pass.OutputScale;
+        var region = ScaleAndClamp(sourceRegion, pass.OutputScale, fullWidth, fullHeight);
+        if (region.Width <= 0 || region.Height <= 0) return false;
+
+        _vk.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[passIndex]);
+        var set = _sets[passIndex];
+        _vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayouts[passIndex], 0, 1, &set, 0, null);
+
+        WritePushConstants(push, pass, region, fullWidth, fullHeight);
+        _vk.CmdPushConstants(cmd, _pipelineLayouts[passIndex], ShaderStageFlags.ComputeBit, 0,
+            (uint)_pushSize, push);
+
+        uint groupsX = (uint)((region.Width + 7) / 8);
+        uint groupsY = (uint)((region.Height + 7) / 8);
+        _vk.CmdDispatch(cmd, groupsX, groupsY, 1);
+        return true;
+    }
+
+    private void BarrierOutput(CommandBuffer cmd, int passIndex)
+    {
+        var output = ResolveImage(_variant.Passes[passIndex].Output);
+        bool final = passIndex == _variant.Passes.Count - 1;
+        VulkanUtil.ImageBarrier(_vk, cmd, output, ImageLayout.General, ImageLayout.General,
+            AccessFlags.ShaderWriteBit, AccessFlags.ShaderReadBit,
+            PipelineStageFlags.ComputeShaderBit,
+            final ? PipelineStageFlags.FragmentShaderBit : PipelineStageFlags.ComputeShaderBit);
     }
 
     private void EnsureImagesInitialized(CommandBuffer cmd)

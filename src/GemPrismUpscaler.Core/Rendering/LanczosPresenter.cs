@@ -4,15 +4,17 @@ using Silk.NET.Vulkan;
 namespace GemPrismUpscaler.Core.Rendering;
 
 /// <summary>
-/// Final composition pass: draws the 2x Anime4K result into the swapchain with a
-/// Lanczos-2 filter, clearing the letterbox/pillarbox bars to black.
+/// Final composition pass: draws the 2x Anime4K result into a persistent
+/// composed image with a Lanczos-2 filter. The image keeps the letterbox bars
+/// and the previous frame outside the dirty regions, so partial updates do not
+/// need to redraw the whole screen. VulkanBlitter copies the composed image to
+/// the acquired swapchain image afterwards.
 /// </summary>
 internal sealed unsafe class LanczosPresenter : IDisposable
 {
     private readonly Vk _vk;
     private readonly Device _device;
-    private readonly Image[] _swapchainImages;
-    private readonly ImageView[] _swapchainViews;
+    private readonly ImageView _targetView;
     private readonly Format _format;
     private readonly Extent2D _extent;
 
@@ -23,19 +25,17 @@ internal sealed unsafe class LanczosPresenter : IDisposable
     private DescriptorPool _descriptorPool;
     private DescriptorSet _set;
     private Sampler _sampler;
-    private Framebuffer[] _framebuffers = Array.Empty<Framebuffer>();
+    private Framebuffer _framebuffer;
     private ImageView? _sourceView;
     private bool _disposed;
 
     private static readonly byte[] EntryPoint = "main\0"u8.ToArray();
 
-    public LanczosPresenter(Vk vk, Device device, Image[] swapchainImages, ImageView[] swapchainViews,
-        Format format, Extent2D extent)
+    public LanczosPresenter(Vk vk, Device device, ImageView targetView, Format format, Extent2D extent)
     {
         _vk = vk;
         _device = device;
-        _swapchainImages = swapchainImages;
-        _swapchainViews = swapchainViews;
+        _targetView = targetView;
         _format = format;
         _extent = extent;
 
@@ -77,12 +77,12 @@ internal sealed unsafe class LanczosPresenter : IDisposable
         {
             Format = _format,
             Samples = SampleCountFlags.Count1Bit,
-            LoadOp = AttachmentLoadOp.Clear,
+            LoadOp = AttachmentLoadOp.Load,
             StoreOp = AttachmentStoreOp.Store,
             StencilLoadOp = AttachmentLoadOp.DontCare,
             StencilStoreOp = AttachmentStoreOp.DontCare,
             InitialLayout = ImageLayout.ColorAttachmentOptimal,
-            FinalLayout = ImageLayout.PresentSrcKhr
+            FinalLayout = ImageLayout.ColorAttachmentOptimal
         };
         var colorRef = new AttachmentReference
         {
@@ -119,22 +119,18 @@ internal sealed unsafe class LanczosPresenter : IDisposable
 
     private void CreateFramebuffers()
     {
-        _framebuffers = new Framebuffer[_swapchainViews.Length];
-        for (int i = 0; i < _swapchainViews.Length; i++)
+        var view = _targetView;
+        var ci = new FramebufferCreateInfo
         {
-            var view = _swapchainViews[i];
-            var ci = new FramebufferCreateInfo
-            {
-                SType = StructureType.FramebufferCreateInfo,
-                RenderPass = _renderPass,
-                AttachmentCount = 1,
-                PAttachments = &view,
-                Width = _extent.Width,
-                Height = _extent.Height,
-                Layers = 1
-            };
-            VulkanUtil.Check(_vk.CreateFramebuffer(_device, &ci, null, out _framebuffers[i]), "CreateFramebuffer(lanczos)");
-        }
+            SType = StructureType.FramebufferCreateInfo,
+            RenderPass = _renderPass,
+            AttachmentCount = 1,
+            PAttachments = &view,
+            Width = _extent.Width,
+            Height = _extent.Height,
+            Layers = 1
+        };
+        VulkanUtil.Check(_vk.CreateFramebuffer(_device, &ci, null, out _framebuffer), "CreateFramebuffer(lanczos)");
     }
 
     private void CreateDescriptors()
@@ -335,30 +331,17 @@ internal sealed unsafe class LanczosPresenter : IDisposable
         _vk.UpdateDescriptorSets(_device, 1, &write, 0, null);
     }
 
-    public void Record(CommandBuffer cmd, uint imageIndex, RectI destRect, bool firstUse)
+    public void Record(CommandBuffer cmd, RectI destRect, IReadOnlyList<RectI>? dirtyRects, bool fullFrame)
     {
         if (_sourceView is null)
             throw new InvalidOperationException("LanczosPresenter.SetSource must be called before Record");
 
-        var image = _swapchainImages[imageIndex];
-        VulkanUtil.ImageBarrier(_vk, cmd, image,
-            firstUse ? ImageLayout.Undefined : ImageLayout.PresentSrcKhr,
-            ImageLayout.ColorAttachmentOptimal,
-            0, AccessFlags.ColorAttachmentWriteBit,
-            PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.ColorAttachmentOutputBit);
-
-        var clear = new ClearValue
-        {
-            Color = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 }
-        };
         var begin = new RenderPassBeginInfo
         {
             SType = StructureType.RenderPassBeginInfo,
             RenderPass = _renderPass,
-            Framebuffer = _framebuffers[imageIndex],
-            RenderArea = new Rect2D { Offset = new Offset2D(0, 0), Extent = _extent },
-            ClearValueCount = 1,
-            PClearValues = &clear
+            Framebuffer = _framebuffer,
+            RenderArea = new Rect2D { Offset = new Offset2D(0, 0), Extent = _extent }
         };
         _vk.CmdBeginRenderPass(cmd, &begin, SubpassContents.Inline);
 
@@ -366,6 +349,9 @@ internal sealed unsafe class LanczosPresenter : IDisposable
         var set = _set;
         _vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _pipelineLayout, 0, 1, &set, 0, null);
 
+        // The full-screen triangle's UVs are derived from the viewport, so the
+        // viewport always stays at the whole content rectangle; the scissor is
+        // what restricts a partial update to the dirty output rectangles.
         var viewport = new Viewport
         {
             X = destRect.X,
@@ -375,15 +361,43 @@ internal sealed unsafe class LanczosPresenter : IDisposable
             MinDepth = 0,
             MaxDepth = 1
         };
+        _vk.CmdSetViewport(cmd, 0, 1, &viewport);
+
+        if (fullFrame || dirtyRects is null || dirtyRects.Count == 0)
+        {
+            DrawScissor(cmd, destRect);
+        }
+        else
+        {
+            foreach (var rect in dirtyRects)
+            {
+                var clipped = Clip(rect, destRect);
+                if (clipped.Width > 0 && clipped.Height > 0)
+                    DrawScissor(cmd, clipped);
+            }
+        }
+
+        _vk.CmdEndRenderPass(cmd);
+    }
+
+    private void DrawScissor(CommandBuffer cmd, RectI rect)
+    {
         var scissor = new Rect2D
         {
-            Offset = new Offset2D(destRect.X, destRect.Y),
-            Extent = new Extent2D((uint)destRect.Width, (uint)destRect.Height)
+            Offset = new Offset2D(rect.X, rect.Y),
+            Extent = new Extent2D((uint)rect.Width, (uint)rect.Height)
         };
-        _vk.CmdSetViewport(cmd, 0, 1, &viewport);
         _vk.CmdSetScissor(cmd, 0, 1, &scissor);
         _vk.CmdDraw(cmd, 3, 1, 0, 0);
-        _vk.CmdEndRenderPass(cmd);
+    }
+
+    private static RectI Clip(RectI rect, RectI bounds)
+    {
+        int left = Math.Max(rect.X, bounds.X);
+        int top = Math.Max(rect.Y, bounds.Y);
+        int right = Math.Min(rect.Right, bounds.Right);
+        int bottom = Math.Min(rect.Bottom, bounds.Bottom);
+        return new RectI(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
     }
 
     public void Dispose()
@@ -392,8 +406,7 @@ internal sealed unsafe class LanczosPresenter : IDisposable
         _disposed = true;
         if (_device.Handle == 0) return;
 
-        foreach (var fb in _framebuffers)
-            if (fb.Handle != 0) _vk.DestroyFramebuffer(_device, fb, null);
+        if (_framebuffer.Handle != 0) _vk.DestroyFramebuffer(_device, _framebuffer, null);
         if (_pipeline.Handle != 0) _vk.DestroyPipeline(_device, _pipeline, null);
         if (_pipelineLayout.Handle != 0) _vk.DestroyPipelineLayout(_device, _pipelineLayout, null);
         if (_setLayout.Handle != 0) _vk.DestroyDescriptorSetLayout(_device, _setLayout, null);

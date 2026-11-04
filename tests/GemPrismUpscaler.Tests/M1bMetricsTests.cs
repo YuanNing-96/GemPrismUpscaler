@@ -11,6 +11,8 @@ public class M1bMetricsTests
         Presented: 60,
         CaptureAvgMs: 0.5,
         CaptureP95Ms: 0.9,
+        DiffAvgMs: 0.7,
+        DiffP95Ms: 1.1,
         UploadAvgMs: 0.3,
         UploadP95Ms: 0.4,
         EffectAvgMs: 3.2,
@@ -32,7 +34,7 @@ public class M1bMetricsTests
     {
         string[] header = FrameReport.CsvHeader.Split(',');
         string[] line = Report().ToCsvLine().Split(',');
-        Assert.Equal(21, header.Length);
+        Assert.Equal(23, header.Length);
         Assert.Equal(header.Length, line.Length);
     }
 
@@ -41,6 +43,7 @@ public class M1bMetricsTests
     {
         string line = Report().ToLogString();
         Assert.Contains("capture=0.50/0.90ms", line);
+        Assert.Contains("diff=0.70/1.10ms", line);
         Assert.Contains("upload=0.30/0.40ms", line);
         Assert.Contains("effect=3.20/4.10ms", line);
         Assert.Contains("present=0.20/0.30ms", line);
@@ -62,7 +65,7 @@ public class M1bMetricsTests
     public void CsvUsesInvariantDecimalSeparator()
     {
         string line = Report().ToCsvLine();
-        Assert.Contains(",0.500,0.900,", line);
+        Assert.Contains(",0.500,0.900,0.700,1.100,", line);
         Assert.Contains(",3.200,", line);
         Assert.Contains(",12.50,", line);
     }

@@ -11,6 +11,7 @@ namespace GemPrismUpscaler.Core.Engine;
 /// </summary>
 public readonly record struct FrameTimings(
     double CaptureMs,
+    double DiffMs,
     double UploadCpuMs,
     double EffectCpuMs,
     double PresentCpuMs,
@@ -27,6 +28,8 @@ public sealed record FrameReport(
     long Presented,
     double CaptureAvgMs,
     double CaptureP95Ms,
+    double DiffAvgMs,
+    double DiffP95Ms,
     double UploadAvgMs,
     double UploadP95Ms,
     double EffectAvgMs,
@@ -57,11 +60,12 @@ public sealed record FrameReport(
             : "gpuUtil=n/a vram=n/a";
         return string.Format(CultureInfo.InvariantCulture,
             "fps={0:F1} captured={1} presented={2} " +
-            "capture={3:F2}/{4:F2}ms upload={5:F2}/{6:F2}ms " +
-            "effect={7:F2}/{8:F2}ms present={9:F2}/{10:F2}ms " +
-            "{11} cpu={12:F1}% {13}",
+            "capture={3:F2}/{4:F2}ms diff={5:F2}/{6:F2}ms " +
+            "upload={7:F2}/{8:F2}ms effect={9:F2}/{10:F2}ms " +
+            "present={11:F2}/{12:F2}ms {13} cpu={14:F1}% {15}",
             Fps, Captured, Presented,
             CaptureAvgMs, CaptureP95Ms,
+            DiffAvgMs, DiffP95Ms,
             UploadAvgMs, UploadP95Ms,
             EffectAvgMs, EffectP95Ms,
             PresentAvgMs, PresentP95Ms,
@@ -73,9 +77,11 @@ public sealed record FrameReport(
         string timestamp = DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture);
         return string.Format(CultureInfo.InvariantCulture,
             "{0},{1:F2},{2},{3},{4:F3},{5:F3},{6:F3},{7:F3},{8:F3},{9:F3}," +
-            "{10:F3},{11:F3},{12},{13:F3},{14:F3},{15:F3},{16:F2},{17},{18:F1},{19:F1},{20:F1}",
+            "{10:F3},{11:F3},{12:F3},{13:F3},{14},{15:F3},{16:F3},{17:F3}," +
+            "{18:F2},{19},{20:F1},{21:F1},{22:F1}",
             timestamp, Fps, Captured, Presented,
             CaptureAvgMs, CaptureP95Ms,
+            DiffAvgMs, DiffP95Ms,
             UploadAvgMs, UploadP95Ms,
             EffectAvgMs, EffectP95Ms,
             PresentAvgMs, PresentP95Ms,
@@ -87,6 +93,7 @@ public sealed record FrameReport(
     public const string CsvHeader =
         "timestamp,fps,captured,presented," +
         "capture_avg_ms,capture_p95_ms," +
+        "diff_avg_ms,diff_p95_ms," +
         "upload_avg_ms,upload_p95_ms," +
         "effect_avg_ms,effect_p95_ms," +
         "present_avg_ms,present_p95_ms," +
@@ -107,6 +114,7 @@ public sealed class FrameStats
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Process _process = Process.GetCurrentProcess();
     private readonly double[] _capture = new double[WindowSize];
+    private readonly double[] _diff = new double[WindowSize];
     private readonly double[] _upload = new double[WindowSize];
     private readonly double[] _effect = new double[WindowSize];
     private readonly double[] _present = new double[WindowSize];
@@ -138,6 +146,7 @@ public sealed class FrameStats
     public void OnFrame(in FrameTimings timings)
     {
         _capture[_head] = timings.CaptureMs;
+        _diff[_head] = timings.DiffMs;
         _upload[_head] = timings.UploadCpuMs;
         _effect[_head] = timings.EffectCpuMs;
         _present[_head] = timings.PresentCpuMs;
@@ -171,6 +180,8 @@ public sealed class FrameStats
         int count = _count;
         double captureAvg = Average(_capture, count);
         double captureP95 = Percentile(_capture, count, 0.95);
+        double diffAvg = Average(_diff, count);
+        double diffP95 = Percentile(_diff, count, 0.95);
         double uploadAvg = Average(_upload, count);
         double uploadP95 = Percentile(_upload, count, 0.95);
         double effectAvg = Average(_effect, count);
@@ -187,6 +198,7 @@ public sealed class FrameStats
             c - _lastCaptured,
             p - _lastPresented,
             captureAvg, captureP95,
+            diffAvg, diffP95,
             uploadAvg, uploadP95,
             effectAvg, effectP95,
             presentAvg, presentP95,

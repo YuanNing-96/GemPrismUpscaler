@@ -49,9 +49,14 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private Image _sourceImage;
     private ImageView _sourceView;
     private DeviceMemory _sourceMemory;
+    private Image _composedImage;
+    private ImageView _composedView;
+    private DeviceMemory _composedMemory;
+    private ImageLayout _composedLayout = ImageLayout.Undefined;
     private VkBuffer _stagingBuffer;
     private DeviceMemory _stagingMemory;
     private void* _stagingMapped;
+    private readonly BufferImageCopy[] _copyRegions = new BufferImageCopy[4096];
     private int _sourceWidth;
     private int _sourceHeight;
     private int _sourceStride;
@@ -81,6 +86,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
     public double LastGpuTailMs => _lastGpuTailMs;
     public bool LastGpuTimingsValid => _lastGpuValid;
 
+    /// <summary>Source-pixel halo required by the active Anime4K variant.</summary>
+    public int DirtyHalo => _anime4k?.Radius ?? 0;
+
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
         EffectMode effect = EffectMode.Anime4KS)
     {
@@ -99,7 +107,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CreateStagingBuffer();
         if (_effect.IsAnime4K())
         {
-            _presenter = new LanczosPresenter(_vk, _device, _swapchainImages, _swapchainViews,
+            CreateComposedImage();
+            _presenter = new LanczosPresenter(_vk, _device, _composedView,
                 _swapchainFormat, _swapchainExtent);
         }
     }
@@ -380,6 +389,58 @@ public sealed unsafe class VulkanBlitter : IDisposable
         }
     }
 
+    /// <summary>
+/// Persistent full-screen image that holds the last composed frame. Dirty
+/// updates patch this image, then a single image copy feeds the acquired
+/// swapchain image. Without it a partial render would lose the untouched areas
+/// because swapchain images rotate.
+/// </summary>
+    private void CreateComposedImage()
+    {
+        var ci = new ImageCreateInfo
+        {
+            SType = StructureType.ImageCreateInfo,
+            ImageType = ImageType.Type2D,
+            Format = _swapchainFormat,
+            Extent = new Extent3D(_swapchainExtent.Width, _swapchainExtent.Height, 1),
+            MipLevels = 1,
+            ArrayLayers = 1,
+            Samples = SampleCountFlags.Count1Bit,
+            Tiling = ImageTiling.Optimal,
+            Usage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
+            SharingMode = SharingMode.Exclusive,
+            InitialLayout = ImageLayout.Undefined
+        };
+        Check(_vk.CreateImage(_device, &ci, null, out _composedImage), "CreateImage(composed)");
+        _vk.GetImageMemoryRequirements(_device, _composedImage, out var req);
+        var alloc = new MemoryAllocateInfo
+        {
+            SType = StructureType.MemoryAllocateInfo,
+            AllocationSize = req.Size,
+            MemoryTypeIndex = FindMemoryType(req.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit)
+        };
+        Check(_vk.AllocateMemory(_device, &alloc, null, out _composedMemory), "AllocateMemory(composed)");
+        Check(_vk.BindImageMemory(_device, _composedImage, _composedMemory, 0), "BindImageMemory(composed)");
+
+        var viewInfo = new ImageViewCreateInfo
+        {
+            SType = StructureType.ImageViewCreateInfo,
+            Image = _composedImage,
+            ViewType = ImageViewType.Type2D,
+            Format = _swapchainFormat,
+            SubresourceRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            }
+        };
+        Check(_vk.CreateImageView(_device, &viewInfo, null, out _composedView), "CreateImageView(composed)");
+        _composedLayout = ImageLayout.Undefined;
+    }
+
     private void CreateSyncAndCommands()
     {
         var sem = new SemaphoreCreateInfo { SType = StructureType.SemaphoreCreateInfo };
@@ -578,7 +639,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
     }
 
     /// <summary>Uploads one BGRA frame and presents it into destRect.</summary>
-    public void Render(ReadOnlySpan<byte> frame, int width, int height, int stride, RectI destRect)
+    public void Render(ReadOnlySpan<byte> frame, int width, int height, int stride, RectI destRect,
+        DirtyFrame? dirty = null)
     {
         if (frame.Length < stride * height) throw new ArgumentException("frame buffer too small");
         var totalClock = Stopwatch.StartNew();
@@ -595,8 +657,12 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (acquire != Result.Success && acquire != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkAcquireNextImageKHR failed: {acquire}");
 
+        bool fullFrame = dirty is null || dirty.FullFrame || !_effect.IsAnime4K();
         var uploadClock = Stopwatch.StartNew();
-        CopyToStaging(frame, width, height, stride);
+        if (!fullFrame && dirty!.UploadRects.Count > 0)
+            CopyTilesToStaging(frame, width, height, stride, dirty.UploadRects);
+        else
+            CopyToStaging(frame, width, height, stride);
         LastUploadCpuMs = uploadClock.Elapsed.TotalMilliseconds;
 
         var begin = new CommandBufferBeginInfo
@@ -611,10 +677,10 @@ public sealed unsafe class VulkanBlitter : IDisposable
             _vk.CmdResetQueryPool(_commandBuffer, _timestampPool, 0, 4);
         WriteTimestamp(PipelineStageFlags.TopOfPipeBit, 0);
 
-        if (_effect == EffectMode.Bilinear)
+        if (!_effect.IsAnime4K())
             RecordBilinear(imageIndex, width, height, destRect);
         else
-            RecordAnime4K(imageIndex, width, height, destRect);
+            RecordAnime4K(imageIndex, width, height, destRect, dirty, fullFrame);
 
         WriteTimestamp(PipelineStageFlags.BottomOfPipeBit, 3);
         Check(_vk.EndCommandBuffer(_commandBuffer), "EndCommandBuffer");
@@ -716,7 +782,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
         TransitionImage(_swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr, fullRange);
     }
 
-    private void RecordAnime4K(uint imageIndex, int width, int height, RectI destRect)
+    private void RecordAnime4K(uint imageIndex, int width, int height, RectI destRect,
+        DirtyFrame? dirty, bool fullFrame)
     {
         if (_sourceLayout == ImageLayout.Undefined)
         {
@@ -731,7 +798,10 @@ public sealed unsafe class VulkanBlitter : IDisposable
             _sourceLayout = ImageLayout.General;
         }
 
-        CopySourceImage(width, height, ImageLayout.General);
+        if (fullFrame || dirty is null)
+            CopySourceImage(width, height, ImageLayout.General);
+        else
+            CopySourceRegions(dirty.UploadRects, width, height, ImageLayout.General);
         VulkanUtil.ImageBarrier(_vk, _commandBuffer, _sourceImage, ImageLayout.General, ImageLayout.General,
             AccessFlags.TransferWriteBit, AccessFlags.ShaderReadBit,
             PipelineStageFlags.TransferBit, PipelineStageFlags.ComputeShaderBit);
@@ -739,12 +809,160 @@ public sealed unsafe class VulkanBlitter : IDisposable
 
         _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height, _effect);
         _presenter!.SetSource(_anime4k.OutputView);
-        _anime4k.Record(_commandBuffer, new RectI(0, 0, width, height));
+        if (fullFrame || dirty is null)
+            _anime4k.Record(_commandBuffer, new RectI(0, 0, width, height));
+        else
+            _anime4k.Record(_commandBuffer, dirty.ComputeRects);
         WriteTimestamp(PipelineStageFlags.ComputeShaderBit, 2);
 
         bool firstUse = _swapchainFirstUse[imageIndex];
         _swapchainFirstUse[imageIndex] = false;
-        _presenter.Record(_commandBuffer, imageIndex, destRect, firstUse);
+
+        PrepareComposedForRender(fullFrame);
+        _presenter.Record(_commandBuffer, destRect, dirty?.OutputRects, fullFrame);
+        FinishComposedAndPresent(imageIndex, firstUse);
+    }
+
+    private void PrepareComposedForRender(bool fullFrame)
+    {
+        var range = new ImageSubresourceRange
+        {
+            AspectMask = ImageAspectFlags.ColorBit,
+            BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
+        };
+
+        if (fullFrame)
+        {
+            if (_composedLayout == ImageLayout.Undefined)
+            {
+                VulkanUtil.ImageBarrier(_vk, _commandBuffer, _composedImage,
+                    ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+                    0, AccessFlags.TransferWriteBit,
+                    PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.TransferBit);
+            }
+            else
+            {
+                VulkanUtil.ImageBarrier(_vk, _commandBuffer, _composedImage,
+                    _composedLayout, ImageLayout.TransferDstOptimal,
+                    AccessFlags.TransferReadBit, AccessFlags.TransferWriteBit,
+                    PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+            }
+
+            var black = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 };
+            _vk.CmdClearColorImage(_commandBuffer, _composedImage, ImageLayout.TransferDstOptimal,
+                &black, 1, &range);
+            VulkanUtil.ImageBarrier(_vk, _commandBuffer, _composedImage,
+                ImageLayout.TransferDstOptimal, ImageLayout.ColorAttachmentOptimal,
+                AccessFlags.TransferWriteBit, AccessFlags.ColorAttachmentWriteBit,
+                PipelineStageFlags.TransferBit, PipelineStageFlags.ColorAttachmentOutputBit);
+        }
+        else if (_composedLayout != ImageLayout.ColorAttachmentOptimal)
+        {
+            AccessFlags srcAccess = _composedLayout == ImageLayout.Undefined
+                ? 0
+                : AccessFlags.TransferReadBit;
+            PipelineStageFlags srcStage = _composedLayout == ImageLayout.Undefined
+                ? PipelineStageFlags.TopOfPipeBit
+                : PipelineStageFlags.TransferBit;
+            VulkanUtil.ImageBarrier(_vk, _commandBuffer, _composedImage,
+                _composedLayout, ImageLayout.ColorAttachmentOptimal,
+                srcAccess, AccessFlags.ColorAttachmentWriteBit,
+                srcStage, PipelineStageFlags.ColorAttachmentOutputBit);
+        }
+
+        _composedLayout = ImageLayout.ColorAttachmentOptimal;
+    }
+
+    private void FinishComposedAndPresent(uint imageIndex, bool firstUse)
+    {
+        var range = new ImageSubresourceRange
+        {
+            AspectMask = ImageAspectFlags.ColorBit,
+            BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1
+        };
+
+        VulkanUtil.ImageBarrier(_vk, _commandBuffer, _composedImage,
+            ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
+            AccessFlags.ColorAttachmentWriteBit, AccessFlags.TransferReadBit,
+            PipelineStageFlags.ColorAttachmentOutputBit, PipelineStageFlags.TransferBit);
+        _composedLayout = ImageLayout.TransferSrcOptimal;
+
+        ImageLayout oldSwapchainLayout = firstUse ? ImageLayout.Undefined : ImageLayout.PresentSrcKhr;
+        TransitionImage(_swapchainImages[imageIndex], oldSwapchainLayout, ImageLayout.TransferDstOptimal, range);
+
+        var copy = new ImageCopy
+        {
+            SrcSubresource = new ImageSubresourceLayers
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+            },
+            DstSubresource = new ImageSubresourceLayers
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+            },
+            Extent = new Extent3D(_swapchainExtent.Width, _swapchainExtent.Height, 1)
+        };
+        _vk.CmdCopyImage(_commandBuffer, _composedImage, ImageLayout.TransferSrcOptimal,
+            _swapchainImages[imageIndex], ImageLayout.TransferDstOptimal, 1, &copy);
+
+        TransitionImage(_swapchainImages[imageIndex], ImageLayout.TransferDstOptimal,
+            ImageLayout.PresentSrcKhr, range);
+    }
+
+    private void CopyTilesToStaging(ReadOnlySpan<byte> frame, int width, int height, int stride,
+        IReadOnlyList<RectI> rects)
+    {
+        byte* destination = (byte*)_stagingMapped;
+        fixed (byte* source = frame)
+        {
+            foreach (var rect in rects)
+            {
+                int rowBytes = rect.Width * 4;
+                for (int row = 0; row < rect.Height; row++)
+                {
+                    byte* src = source + (rect.Y + row) * stride + rect.X * 4;
+                    byte* dst = destination + ((rect.Y + row) * width + rect.X) * 4;
+                    System.Buffer.MemoryCopy(src, dst, rowBytes, rowBytes);
+                }
+            }
+        }
+    }
+
+    private void CopySourceRegions(IReadOnlyList<RectI> rects, int width, int height, ImageLayout layout)
+    {
+        if (rects.Count == 0) return;
+        if (rects.Count > _copyRegions.Length)
+            throw new InvalidOperationException($"too many upload regions ({rects.Count})");
+
+        int count = 0;
+        foreach (var rect in rects)
+        {
+            if (rect.Width <= 0 || rect.Height <= 0) continue;
+            _copyRegions[count] = new BufferImageCopy
+            {
+                BufferOffset = ((ulong)rect.Y * (ulong)width + (ulong)rect.X) * 4,
+                // The staging buffer is a full-width frame, so a sub-rectangle
+                // must tell Vulkan the real row stride; 0 would mean tightly
+                // packed rows of the sub-rectangle width (the stripe bug).
+                BufferRowLength = (uint)width,
+                BufferImageHeight = 0,
+                ImageSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1
+                },
+                ImageOffset = new Offset3D(rect.X, rect.Y, 0),
+                ImageExtent = new Extent3D((uint)rect.Width, (uint)rect.Height, 1)
+            };
+            count++;
+        }
+
+        if (count == 0) return;
+        fixed (BufferImageCopy* regions = _copyRegions)
+            _vk.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, _sourceImage, layout,
+                (uint)count, regions);
     }
 
     private void CopySourceImage(int width, int height, ImageLayout layout)
@@ -837,6 +1055,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
             _vk.DeviceWaitIdle(_device);
             _anime4k?.Dispose();
             _presenter?.Dispose();
+            if (_composedView.Handle != 0) _vk.DestroyImageView(_device, _composedView, null);
+            if (_composedImage.Handle != 0) _vk.DestroyImage(_device, _composedImage, null);
+            if (_composedMemory.Handle != 0) _vk.FreeMemory(_device, _composedMemory, null);
             if (_sourceView.Handle != 0) _vk.DestroyImageView(_device, _sourceView, null);
             if (_stagingMapped != null) _vk.UnmapMemory(_device, _stagingMemory);
             if (_stagingBuffer.Handle != 0) _vk.DestroyBuffer(_device, _stagingBuffer, null);

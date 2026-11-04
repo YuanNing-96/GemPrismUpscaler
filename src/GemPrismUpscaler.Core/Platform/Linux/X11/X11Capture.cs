@@ -16,6 +16,7 @@ public sealed class X11Capture : IDisposable
     private IntPtr _shmAddr;
     private int _shmId = -1;
     private bool _attached;
+    private bool _usingShm;
     private bool _disposed;
 
     public int Width { get; private set; }
@@ -23,6 +24,16 @@ public sealed class X11Capture : IDisposable
     public int Stride { get; private set; }
     public byte[] Buffer { get; private set; } = Array.Empty<byte>();
     public bool IsAvailable => _attached && _image != IntPtr.Zero;
+
+    /// <summary>
+    /// Read-only view of the most recent frame. On the primary XShm path this
+    /// points directly into shared memory, so the dirty-tile hash and staging
+    /// upload avoid a managed full-frame copy. The XGetImage fallback fills
+    /// <see cref="Buffer"/> instead.
+    /// </summary>
+    public unsafe ReadOnlySpan<byte> Pixels => _usingShm && _shmAddr != IntPtr.Zero
+        ? new ReadOnlySpan<byte>((void*)_shmAddr, Stride * Height)
+        : Buffer;
 
     public X11Capture(X11Display display, ulong window, int width, int height)
     {
@@ -79,7 +90,7 @@ public sealed class X11Capture : IDisposable
         if (!IsAvailable) return false;
         if (X11Native.XShmGetImage(_display.Handle, _window, _image, 0, 0, X11Native.AllPlanes) != 0)
         {
-            Marshal.Copy(_shmAddr, Buffer, 0, Buffer.Length);
+            _usingShm = true;
             return true;
         }
 
@@ -102,7 +113,8 @@ public sealed class X11Capture : IDisposable
             if (img.Data == IntPtr.Zero || img.BytesPerLine <= 0) return false;
             int rowBytes = Width * 4;
             for (int y = 0; y < Height; y++)
-                Marshal.Copy(img.Data + y * img.BytesPerLine, Buffer, y * rowBytes, rowBytes);
+                Marshal.Copy(img.Data + y * img.BytesPerLine, Buffer, y * Stride, rowBytes);
+            _usingShm = false;
             return true;
         }
         finally
@@ -147,6 +159,7 @@ public sealed class X11Capture : IDisposable
             _shmInfoPtr = IntPtr.Zero;
         }
         Buffer = Array.Empty<byte>();
+        _usingShm = false;
     }
 
     public void Dispose()
