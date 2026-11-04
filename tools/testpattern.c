@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
             XMapRaised(d, popup_win); XFlush(d); popup_shown = 1;
         }
         if (popup && popup_shown && elapsed >= 5000) {
-            XDestroyWindow(d, popup_win); XFlush(d); popup_shown = 0; popup = 0;
+            XDestroyWindow(d, popup_win); XFlush(d); popup_win = 0; popup_shown = 0; popup = 0;
         }
 
         if (mode_dirty && !dirty_done && elapsed >= delay_ms) {
