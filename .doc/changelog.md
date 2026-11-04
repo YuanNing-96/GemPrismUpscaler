@@ -1,5 +1,36 @@
 # 更新记录
 
+## v0.2.1（2026-11-05）· M1b：指标、Anime4K S/M/L、脏矩形与零拷贝 spike
+
+M1b 把 effect 管线从 5-pass 硬编码改成 manifest 驱动的 N-pass，加入 S/M/L、分块脏矩形、持久合成图和每秒指标；默认仍是 S + Lanczos-2，双线性回退保留。
+
+### 新增
+
+- **Anime4K S/M/L**：`tools/build_shaders.py` 从同一份 mpv user-shader 源展开 S=5、M=9、L=10 pass，生成 `anime4k_{s,m,l}_pN` SPIR-V 与 `anime4k_manifest.json`；`Anime4KChain` 按 manifest 分配纹理/描述符/pipeline；L 的并行分支和 M 的 1×1 合并 pass 都能跑。默认 S；UI 三项 + 双线性；CLI `anime4k-s|anime4k-m|anime4k-l`，`anime4k` 仍为 S 别名。
+- **指标**：`FrameStats` 增加 capture/diff/upload/effect/present 平均/p95；`VulkanBlitter` 用 Vulkan timestamp query 测 upload/effect/tail；`NvmlMetrics` 读整卡 GPU 利用率和显存；进程 CPU；每秒 `stats` 行；可选 `GEMPRISM_STATS=/path/stats.csv`。
+- **脏矩形**：64px 分块 64-bit 哈希；只上传变化块（staging 使用全宽 `BufferRowLength`）；按 manifest halo 扩展后只重算变化区域；Lanczos 写入持久 4K 合成图，再整图 copy 到 swapchain；≥50% 变化回退整帧；`--no-dirty-rect` 可关闭。主路径直接从 shm 指针哈希/上传，去掉整帧托管拷贝。
+- **测试工具**：`tools/testpattern.c`（static/dirty/animate/repaint/popup）、`tools/bench-m1b.sh`（场景/截图/CSV）、`.agent/M1b验收记录.md`。
+- **零拷贝 spike**：`tools/zero-copy/` 的 DRI3 导出与 Vulkan 导入探针；GPU 窗口（vkcube）线性 1-fd 导入成功，软件窗口 2-fd/DCC 需回退；结论“有条件 go”，不进默认链路；详见 `.doc/zero-copy-spike.md`。
+- **版本**：0.2.1；`--version`、日志、文档同步。
+
+### 验证
+
+- `dotnet build -c Release`：0 warning / 0 error；`dotnet test -c Release`：53/53。
+- 1280×720 静态：`captured=0 presented=0 gpu=n/a`，整卡 0%；每帧重绘同像素：`captured≈60 presented=0`。
+- 小脏块 one-shot：脏矩形与 `--no-dirty-rect` 最终截图 `AE=0`（逐像素一致）；文本/1px 网格无块缝。
+- 小脏块动画：`diff≈1.05 ms`、`gpuEffect≈0.02–0.17 ms`、`gpuTail≈0.1–0.3 ms`，47.9 fps（当前合成器上限）。
+- 全屏动画：脏矩形开/关均 47.9 fps；GPU effect 约 2.9 ms（1920×1200），4K override 下 S/M/L 约 0.65/1.3–1.5/2.1–2.3 ms，显存 555/585/593 MiB。
+- 双线性回归、弹窗让位/恢复、单实例、退出路径保持正常。
+- M1a 的真实双屏/外接屏 4K 帧率待用户接屏后按验收记录复测。
+
+### 注意事项
+
+- 当前开发机合成器约 48 fps 上限，不能据此判断 60/144Hz 上限。
+- 4K 源（2×→8K）未测；脏矩形哈希 720p 约 1 ms/帧，4K 源约 4 倍。
+- 零拷贝只验证导出+导入，未做 fence 同步/端到端画面，不进入默认链路。
+- `present` 计时包含 `QueuePresent` 的 vblank/队列等待。
+- 4K 数据用 `--output-size 3840x2160` 在 1920×1200 屏上覆写得到；真实外接屏仍需复测。
+
 ## v0.2.0（2026-11-04）· M1a：单实例、退出审计与多显示器基础
 
 M1a 不改变 effect 管线，仍使用 Anime4K S + Lanczos-2 和双线性回退；重点是把“能退出、能选屏、不会跨屏”做扎实。

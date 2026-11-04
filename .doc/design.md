@@ -1,6 +1,6 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.2 · 对应 M1a 规划
+版本 0.2.1 · 对应 M1b（指标 / S/M/L / 脏矩形 / 零拷贝 spike）
 
 ---
 
@@ -307,8 +307,10 @@ XShmGetImage(直接读 client window)
 - KWin 合成会话里窗口已经被重定向，实测 `XShmGetImage` 直接读被遮挡窗口就能拿到窗口自己的内容；**不需要**先 `XCompositeRedirectWindow`。只有在无合成器的原生 X11 会话才需要重定向；若 RedirectWindow 返回 BadAccess 就跳过。
 - 窗口最小化时捕获可能返回陈旧帧；检测 `map_state` / `_NET_WM_STATE_HIDDEN` 后暂停。
 - 直接捕获 client window 本身就不含边框；`_NET_FRAME_EXTENTS` 只在需要把 client 坐标换算到 frame 坐标时使用。
-- XDamage 在 XWayland 下常报全窗口；当前用 Damage 做**帧级跳过**（无变化不捕获、不呈现），静止画面接近零开销。M1b 若要按块重算，需要额外的分块哈希，不能直接依赖 Damage 矩形。
-- XShm 回读（720p 约 3.7 MB/帧）。M1b 先做持久 staging 和分块上传；DRI3/DMA-BUF 零拷贝作为可行性 spike，X11 下不保证有通用路径。
+- XDamage 在 XWayland 下常报全窗口；M1a 用 Damage 做**帧级跳过**。M1b 在帧级跳过之上加 **64px 分块哈希**：XDamage 仍可能每帧触发，但像素不变时不上传、不跑 effect、不 present；局部变化时只上传/重算变化块。
+- XShm 回读（720p 约 3.7 MB/帧）。M1b 主路径直接从 shm 指针做哈希和分块上传，不再整帧 `Marshal.Copy` 到托管数组；`XGetImage` 回退保留。
+- 脏矩形的 halo 来自 manifest：S=5、M=8、L=5 源像素（L 的并行分支不增加空间深度），再加 2px 安全余量。只上传变化块，但 effect 在“变化块 + halo”上重算。
+- DRI3/DMA-BUF 零拷贝 spike 已完成：GPU 窗口线性 1-fd 可导出并在 NVIDIA Vulkan 导入；软件窗口 2-fd/DCC 需要回退。详见 [zero-copy-spike.md](zero-copy-spike.md)，M1b 不放进默认链路。
 - 窗口位置每 200ms 重新查询，用于自动选屏和跨屏移动；窗口尺寸变化时重建 capture。
 
 ### 6.2 呈现（X11）
@@ -322,6 +324,7 @@ XShmGetImage(直接读 client window)
 - 每次重新显示都重新捕获并呈现一帧（unmap 后 surface 内容未定义）；显示时把当前真实指针位置同步给游戏一次，避免悬停状态停留在旧位置。多屏时 root 指针坐标要减去当前显示器原点，再映射到 overlay 局部坐标。
 - 不要用 `XFixesHideCursor`（这是整个 X server 级别）；保持系统光标。
 - 用 Vulkan swapchain（Xlib surface）呈现。双线性路径用 `vkCmdBlitImage`；Anime4K 路径用 compute + Lanczos graphics pass。
+- M1b 起 Anime4K 先写一张**持久 4K 合成图**：整帧时清黑边并全画；局部时 `LoadOp=LOAD`，viewport 保持内容矩形、scissor 限制到脏输出矩形。随后把合成图整图 copy 到当前 swapchain 图像。这样交换链轮转不会丢掉未更新的区域，也不需要 partial present 扩展。
 - 覆盖任务栏/面板是预期行为；停止/退出/崩溃时必须销毁窗口。
 
 ### 6.3 输入
@@ -355,6 +358,13 @@ M0b 实际（v0.1.2）：
 - **几何**：fit / stretch；fit 时先用源宽高比算出内容矩形，再把 2× 结果映射到该矩形。1024×768 fit → 2× 2048×1536 → Lanczos 到 2880×2160，居中 x=480。
 - **算法切换**：`EffectMode.Anime4K`（默认）/ `EffectMode.Bilinear`；UI“超分算法”下拉框，CLI `--effect anime4k|bilinear`。双线性路径保持 M0a 的单次 `vkCmdBlitImage`，用于对比和故障回退。
 - **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1c）。Anime4K S 是效果/性能折中；M/L 变体在 M1b 把管线通用化后接入。
+
+M1b 实际（v0.2.1）：
+
+- **manifest 驱动 N-pass**：`tools/build_shaders.py` 不再假设 5 pass / 固定纹理名，而是从 `//!SAVE` / `//!BIND` / `//!WIDTH` 推出每个 variant 的 pass 图、纹理尺寸和 receptive-field radius，生成 `anime4k_{s,m,l}_pN.comp.spv` + `anime4k_manifest.json`。S=5/6 纹理，M=9/10，L=10/11（L 有并行分支，16 通道层拆成多张 rgba16f）。
+- **统一的 push constant**：`vec2 outSize; vec2 regionOffset; vec2 regionSize; vec2 texSize[N]`。整帧 dispatch 全部输出；脏矩形 dispatch 扩展区域；`HOOKED_pos` 仍用全尺寸归一化，保证局部/整帧一致。L 为 112 B，仍在 128 B 保证上限内，构建脚本会断言。
+- **`Anime4KChain`**：按 manifest 分配中间纹理、descriptor set、pipeline；支持多个输入/并行分支；`Record(cmd, IReadOnlyList<RectI>)` 对每个矩形按 pass 输出倍率缩放后 dispatch，所有矩形处理完再发一次输出 barrier。
+- **算法选择**：`EffectMode.Bilinear / Anime4KS / Anime4KM / Anime4KL`；`anime4k` 是 S 的 CLI 别名；默认 S。
 
 未来的 effect 描述格式（M1c，尚未实现）：
 
@@ -400,6 +410,29 @@ allow_windowed = true
 
 ---
 
+### 6.7 指标与脏矩形（M1b）
+
+**指标**：
+
+- CPU 分段：capture（XShmGetImage）、diff（分块哈希）、upload（staging 拷贝）、effect（命令录制）、present（提交+present，含 vblank 等待）。
+- GPU 分段：Vulkan timestamp query 4 个点（帧开始、上传后、effect 后、命令结束）；`gpuUpload` / `gpuEffect` / `gpuTail`。GPU 时间在下一帧 fence 后读取，报告中最多滞后一帧。
+- 系统：NVML 整卡 GPU 利用率/显存；`Process.TotalProcessorTime` 的进程 CPU；每秒平均/p95。
+- 静止场景没有帧样本时，报告 `gpu=n/a`，不沿用上一帧的 GPU 时间；`captured` / `presented` 仍反映真实计数。
+- 可选 `GEMPRISM_STATS=/path/stats.csv`，表头见 `FrameReport.CsvHeader`。
+
+**脏矩形**：
+
+1. 从 XShm 指针按 64px 分块做 64-bit 哈希，与上一帧比较；尺寸变化/显示重建/恢复时强制整帧。
+2. 变化块合并成行 run → 作为 `UploadRects`；只把这些行拷到全宽 staging，`vkCmdCopyBufferToImage` 的 `bufferRowLength` 必须是整帧宽度（否则会按子矩形紧凑行读取，产生横条纹）。
+3. `ComputeRects = UploadRects` 按 manifest radius 扩展并合并；effect 对每个区域按 pass 倍率 dispatch。中间纹理只有区域被更新，但区域外仍是上一帧有效内容；halo 保证边界像素的输入有效。
+4. `OutputRects = ComputeRects` 映射到内容矩形，加 2px Lanczos 支撑；presenter 用整内容矩形 viewport + 脏矩形 scissor，把结果写进持久合成图。
+5. 变化面积 ≥50% 时回退整帧；整帧路径清合成图后全画，局部路径 `LoadOp=LOAD`。
+6. `--no-dirty-rect` 关闭分块路径，便于 A/B 和故障回退。
+
+### 6.8 零拷贝（M1b spike）
+
+DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。摘要：GPU 窗口（vkcube）可导出线性 1-fd DMA-BUF，并在 NVIDIA Vulkan 上 `vkBindImageMemory` 成功；软件窗口给出 2-fd/DCC，需要回退 XShm。未做 fence 同步和真实游戏端到端验证，**不进入 M1b 默认链路**。
+
 ## 7. 性能预算
 
 ### 7.1 参考测试平台
@@ -432,9 +465,10 @@ allow_windowed = true
 
 ### 7.4 待验证
 
-- Anime4K 多 pass 管线的真实开销（估计 2~5 ms，需实测）
-- 脏矩形生效时的静止画面占用
-- 4K 输出下的呈现开销
+- ~~Anime4K 多 pass 管线的真实开销~~：M1b 已测 S/M/L（§7.8）。
+- ~~脏矩形生效时的静止画面占用~~：M1b 已测 static/repaint（§7.8）。
+- ~~4K 输出下的呈现开销~~：M1b 4K override 已测 gpuTail 约 1.7–2.0 ms；真实 4K 屏待复测。
+- 4K 源（2×→8K）、真实游戏长稳、多 GPU/跨 GPU 仍未测。
 
 ### 7.5 M0a 本机实测（2026-11-02）
 
@@ -478,6 +512,23 @@ allow_windowed = true
 | 单实例 | 第二 CLI 返回 4；第二 GUI 显示“已在运行”提示；`--status` 返回 pid/mode/session/monitor |
 | 退出 | `SIGTERM`、窗口关闭、游戏关闭后无残留进程/overlay |
 
+### 7.8 M1b 本机实测（v0.2.1，2026-11-05）
+
+开发机当前单屏 eDP-2 1920×1200（合成器上限约 48 fps）；4K 数据用 `--output-size 3840x2160` 覆写。
+
+| 项 | 结果 |
+|---|---|
+| 静态 `static` | 0 capture / 0 present；`gpu=n/a`；整卡 GPU 0%；CPU ~3% |
+| 每帧重绘同像素 `repaint` | captured≈60/s、presented=0、gpu=n/a、整卡 0%；CPU ~9% |
+| 小脏块 one-shot | 与 `--no-dirty-rect` 最终截图 `AE=0`；capture≈4.7ms、diff≈4–5ms（静态窗口首次读回） |
+| 小脏块动画 | capture≈0.45ms、diff≈1.05ms、gpuEffect≈0.02–0.17ms、gpuTail≈0.1–0.3ms；47.9fps |
+| 全屏动画 | 脏矩形开/关均 47.9fps；GPU effect≈2.9ms（1920×1200）；CPU 11% vs 6% |
+| 4K override S/M/L | gpuEffect≈0.65 / 1.3–1.5 / 2.1–2.3ms；gpuTail≈1.7–2.0ms；vram 555/585/593MiB；47.9fps |
+| 双线性 | 47.9fps；vram≈395MiB |
+| 弹窗/恢复 | 隐藏/恢复日志与强制整帧重绘正常 |
+| 零拷贝 | vkcube 线性 1-fd 导入成功；testpattern 2-fd/DCC 不适用 |
+
+`present` 约 17ms 是 `QueuePresent` 等待 vblank/队列，不是 CPU 工作；当前 48fps 是合成器上限。GPU 时间显示 60fps 预算有大量余量，真实 4K 60Hz 帧率待外接屏复测。
 
 ---
 
@@ -493,12 +544,15 @@ allow_windowed = true
 | 色彩空间 | HDR 游戏可能发灰或偏亮 | M1a 为 SDR 直通；HDR 桌面下 SDR 内容用户实测正常；HDR/linear 留 M2 |
 | 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出，M2 再评估 |
 | XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |
-| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限；M1a 需要分别在一屏和双屏环境复测 |
+| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限；M1a/M1b 需要分别在一屏和双屏环境复测 |
+| 脏矩形边界/halo | 块缝、文字/1px 线断裂 | manifest radius + 2px 安全余量；one-shot 与整帧截图 `AE=0`；真实游戏待验收 |
+| 零拷贝 DCC/多 fd | 导入失败或画面错 | 运行时检查 `nfd==1 && modifier==0`，否则回退 XShm；M1b 不默认启用 |
+| 4K 源分块哈希 | CPU 约 4 倍（~4ms/帧） | M1b 只承诺常见 VN 分辨率；4K 源在 M2/后续优化（128px tile、SIMD、GPU hash） |
 
 ### 未决问题
 
 1. 覆盖窗口用 Vulkan swapchain 还是直接 present，取决于 compositor 的 vsync 行为
-2. 脏矩形与 CNN 管线的配合：CNN 有感受野，边缘需要额外 padding
+2. 零拷贝的 DRI3 fence → Vulkan external semaphore 同步、真实游戏/跨 GPU 验证（M2 候选）
 3. 是否需要为 4:3 源内容提供整数缩放预设
 
 ---

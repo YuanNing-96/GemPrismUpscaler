@@ -25,9 +25,11 @@
 | NVIDIA 专有驱动 | 已验证 | RTX 4060 Laptop，Vulkan 1.4 |
 | AMD/Intel Vulkan | 未验证 | 代码按标准 Vulkan 编写，未实机测试 |
 | 混合显卡 | 部分支持 | 捕获走 CPU；effect 选择 DiscreteGpu/NVIDIA；跨 GPU 未验证 |
-| Anime4K S 2× + Lanczos-2 | 支持 | 默认效果 |
+| Anime4K S/M/L 2× + Lanczos-2 | 支持 | manifest 驱动 N-pass；默认 S，M/L 为质量档 |
 | 双线性 | 支持 | 回退/对比 |
-| Anime4K M/L | 计划 M1b | 需要通用化 N-pass 管线 |
+| 分块脏矩形 | 支持 | 64px 哈希 + CNN halo + 持久合成图；`--no-dirty-rect` 可关闭 |
+| 分段指标 / CSV | 支持 | capture/diff/upload/effect/present、GPU timestamp、NVML、CPU、p95 |
+| 零拷贝（DRI3/DMA-BUF） | spike 完成 | 线性 1-fd GPU 窗口可导入；2-fd/DCC 需回退；未进默认链路 |
 | FSR1 / NIS / Lanczos-3 / Bicubic | 未排期 | 有需求再评估 |
 
 ## 2. 当前验证环境
@@ -36,8 +38,8 @@
 |---|---|
 | 发行版 | Arch Linux 系 |
 | 桌面 | KDE Plasma 6，Wayland 会话 + XWayland |
-| 显示器 | HDMI-A-1 3840×2160@144Hz，HDR，150%，主屏，位于 root `+1800+489`；DP-1 1800×2880 竖屏，SDR，100%，位于 `0,0` |
-| XWayland root | 5640×2880 |
+| 显示器 | 目标双屏：HDMI-A-1 3840×2160@144Hz，HDR，150%，主屏，位于 root `+1800+489`；DP-1 1800×2880 竖屏，SDR，100%，位于 `0,0`。M1b 开发机当前为 eDP-2 1920×1200；4K 用 `--output-size 3840x2160` 覆写 |
+| XWayland root | 双屏 5640×2880；M1b 当前单屏 1920×1200 |
 | GPU | AMD iGPU + NVIDIA RTX 4060 Laptop 8 GB；effect 在 NVIDIA |
 | .NET | 10.0.114 SDK |
 | Vulkan | 1.4 |
@@ -47,10 +49,13 @@
 
 - 1280×720 → 3840×2160 动态画面约 42–51 fps（当前 HDR/144Hz 桌面的合成器上限约 48–50 fps）。
 - 1280×720 → 1800×2880 竖屏 fit：内容 1800×1012，上下黑边，约 46–50 fps（合成测试窗口）。
-- 静止画面：首次捕获/呈现后 0 capture / 0 present。
+- 静止画面：首次捕获/呈现后 0 capture / 0 present；每帧重绘同像素时 captured≈60、presented=0，整卡 GPU 0%。
 - 4:3 fit（1024×768 → 2880×2160）：左右黑边像素均值 0，内容居中。
 - 弹窗、最小化、焦点跟随、热键、关闭游戏、单实例、跨屏自动跟随。
 - HDR 桌面下 SDR 内容可正常显示，不发灰；未做 HDR 色彩管理。
+- M1b 脏矩形 one-shot：与 `--no-dirty-rect` 最终截图 `AE=0`；小脏块动画 47.9 fps、diff≈1.05ms。
+- M1b 4K override：S/M/L 的 gpuEffect 约 0.65/1.3–1.5/2.1–2.3ms，显存 555/585/593MiB；当前合成器上限 48fps。
+- 双线性、弹窗让位/恢复、退出路径在 M1b 回归通过。
 
 ## 4. 已知限制
 
@@ -58,14 +63,17 @@
 2. **多显示器基础版**：M1a 支持自动/手动选屏和跨屏重建，但热插拔、每屏 DPI、负坐标、跨屏拼接的完整处理在 M2。
 3. **FPS/raw input**：`XSendEvent` 只能更新 X/Wine 消息队列；raw input/DirectInput/`GetCursorPos` 读真实设备，当前方案无效。
 4. **HDR**：SDR 直通；HDR 游戏可能发灰/偏色，等 M2 的 linear/HDR 路径。
-5. **4K 源**：2× 后是 8K，显存/带宽显著上升；M1a 只承诺常见 VN 分辨率（720p/1024×768/1080p）。
+5. **4K 源**：2× 后是 8K，显存/带宽显著上升；M1b 仍只承诺常见 VN 分辨率（720p/1024×768/1080p）。脏矩形哈希 720p 约 1ms/帧，4K 源约 4 倍。
 6. **黑边输入**：非 stretch（fit）时左右/上下黑边不转发鼠标点击和滚轮，这是预期行为，因为黑边不是源窗口像素；stretch 后原黑边区域被画面覆盖，会正常转发。
 7. **swapchain resize**：M1a 在显示器变化时重建 overlay/blitter；源窗口 resize 会重建 capture，但显示模式本身的 swapchain recreation 仍不完整。
 8. **单实例**：M1a 第二实例只提示错误；激活已有窗口是 M1c 设置项。
 9. **设置界面**：M1a 没有完整设置界面；热键、日志路径、默认显示器等见 backlog/M1c。
-10. **自定义 shader**：M1a 只内置 S；M1b 接入 S/M/L；自定义 shader 的运行时策略在 M1c 决定。
+10. **自定义 shader**：M1b 内置 S/M/L；自定义 shader 的运行时策略在 M1c 决定。
 11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
 12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
+13. **零拷贝**：只在 vkcube 线性 1-fd 上验证导入；软件窗口 2-fd/DCC 回退 XShm；未做 fence 同步/真实游戏/跨 GPU，未进默认链路。
+14. **present 计时**：包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；当前 48fps 是合成器上限。
+15. **4K 外接屏**：开发机当前无 4K 屏，4K 数据来自 `--output-size` 覆写；真实 4K 60Hz 帧率待用户复测。
 
 ## 5. 平台差异
 

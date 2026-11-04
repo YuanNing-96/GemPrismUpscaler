@@ -53,22 +53,22 @@ X11/XWayland 游戏窗口
 5. M0a/M0b 的弹窗、最小化、焦点、热键、关闭游戏、静止画面不重复呈现全部回归。
 6. 构建 0 warning / 0 error；测试通过。
 
-### M1b · 效率与 Anime4K S/M/L
+### M1b · 效率与 Anime4K S/M/L（v0.2.1，开发完成，待外接屏验收）
 
-| 模块 | 内容 |
-|---|---|
-| 指标 | capture / upload / effect / present 分段时间、GPU/CPU、静止画面占用 |
-| 算法 | 管线通用化为 N pass；接入 Anime4K **S/M/L**；默认 S，M/L 作为质量档；benchmark 并标注 4K 帧率风险 |
-| 脏矩形 | 分块哈希 + CNN 感受野 halo；只上传/重算变化区域；大面积变化回退整帧 |
-| 上传/呈现 | 持久 staging、减少托管拷贝、按 XDamage/帧率节奏呈现 |
-| 零拷贝 | DRI3 + DMA-BUF 可行性 spike；若 X11 无可靠路径，明确记录并留到 M2 |
+| 模块 | 状态 | 内容 |
+|---|---|---|
+| 指标 | ✅ | capture / diff / upload / effect / present 分段、Vulkan timestamp、NVML GPU/显存、进程 CPU、p95、可选 CSV |
+| 算法 | ✅ | manifest 驱动 N-pass；Anime4K **S/M/L**（5/9/10 pass）；默认 S；UI/CLI 切换；4K 数据见验收记录 |
+| 脏矩形 | ✅ | 64px 分块哈希 + CNN halo；只上传/重算变化区域；持久 4K 合成图；≥50% 变化回退整帧 |
+| 上传/呈现 | ✅ | 主路径直接从 shm 指针哈希/分块上传，去掉整帧托管拷贝；持久 staging；全帧/局部统一走持久合成图 |
+| 零拷贝 | ✅ spike | DRI3+DMA-BUF 探针：GPU 窗口线性 1-fd 可导出并在 NVIDIA Vulkan 导入成功；软件窗口 2-fd/DCC 需回退；**不进默认链路** |
 
 **验收标准**：
 
-1. 静止对话画面 GPU 占用低于 2%。
-2. 脏矩形开启后画面无块状伪影，文本/1px 线正确；动态帧率不低于 M1a。
-3. S/M/L 可切换；默认 S；M/L 的实测帧率、显存、GPU 占用记录在案。
-4. 零拷贝 spike 有明确 go/no-go 结论，不把未验证路径放进默认链路。
+1. 静止对话画面 GPU 占用低于 2%：开发侧 `static` 0 capture/0 present、`repaint` captured≈60/presented=0、`gpu=n/a`、整卡 0%；外接屏复测待做。
+2. 脏矩形开启后画面无块状伪影，文本/1px 线正确；动态帧率不低于 M1a：开发侧 `dirty` 与 `--no-dirty-rect` 最终截图 `AE=0`；`animate` 两者均 47.9 fps（当前合成器上限）。
+3. S/M/L 可切换；默认 S；M/L 的实测帧率、显存、GPU 占用记录在案：开发侧 4K override 数据 S 0.65 ms/555 MiB、M 1.3–1.5 ms/585 MiB、L 2.1–2.3 ms/593 MiB（gpuEffect）；详见 `.agent/M1b验收记录.md`。
+4. 零拷贝 spike 有明确 go/no-go 结论，不把未验证路径放进默认链路：结论为**有条件 go**，详见 [zero-copy-spike.md](zero-copy-spike.md)。
 
 ### M1c · 设置、托盘、动画与扩展
 
@@ -144,6 +144,7 @@ M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依�
 | 0.1.0 / 0.1.1 | M0a（捕获/呈现/输入/弹窗/UI/生命周期） |
 | 0.1.2 | M0b（Anime4K S 2× CNN + Lanczos-2） |
 | 0.2.0 | M1a（单实例/退出审计/多显示器基础） |
-| 0.2.x | M1b / M1c |
+| 0.2.1 | M1b（指标/S/M/L/脏矩形/上传优化/零拷贝 spike） |
+| 0.2.x | M1c |
 | 0.3.x | M2 |
 | 1.0.0 | M3 完成，接口稳定 |

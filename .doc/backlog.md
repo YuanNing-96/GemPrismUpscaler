@@ -29,15 +29,18 @@ M1a 只保留主界面上的窗口/显示器/算法选择；完整设置界面�
 - **CLI 验收辅助**：M1a 的 CLI 条目（第二实例、`--status`、通知）由用户延期测试。后续可提供一段可复制的脚本/操作说明，降低“需要延迟操作”的测试门槛。
 - **黑边输入说明**：非 stretch 模式下黑边不转发鼠标事件是预期行为（黑边不是源窗口内容）；stretch 后原黑边区域属于画面，会正常转发。后续可在 UI/文档中更明确提示。
 
-## 3. M1b / M1c 已讨论项
+## 3. M1b 已完成 / 后续项
 
-- **Anime4K M/L**：M1b 接入；默认 S，M/L 为质量档；L 在 4K 60fps 下可能不足，需实测标注。
-- **分块脏矩形**：M1b；64/128 分块哈希 + CNN 感受野 halo；大面积变化回退整帧。
-- **零拷贝**：M1b 可行性 spike；X11 窗口 pixmap 到 DMA-BUF 没有通用标准路径，可能只能在 Wayland 后端实现。
-- **动画**：M1c；只对 GPU 输出矩形插值，overlay 全屏不动。
-- **托盘**：M1c；开始/停止/显示隐藏/退出；关闭到托盘可选。
-- **Profile**：M1c；按 exe/窗口类自动套用；记住上次选择。
-- **自定义 effect**：M1c；TOML 描述 pass；shader 以预编译 SPIR-V + manifest 分发；系统有 glslang 时才允许源码。
+- **Anime4K S/M/L**：✅ M1b 已接入 manifest 驱动 N-pass；默认 S；4K override 数据已记录；真实 4K 屏待复测。
+- **分块脏矩形**：✅ M1b 已接入 64px 哈希 + halo + 分块上传/局部重算 + 持久合成图；`--no-dirty-rect` 可回退。
+- **零拷贝 spike**：✅ 有条件 go；GPU 窗口线性 1-fd 可导入，2-fd/DCC 需回退；不默认启用；见 `.doc/zero-copy-spike.md`。
+- **指标/CSV**：✅ M1b 已接入；后续可加 UI 仪表/告警（M1c）。
+- **后续优化**：
+  - 脏矩形 hash 在静态窗口首次读回可达 4–5ms；可考虑自适应 throttle/128px tile/SIMD/GPU hash。
+  - 4K 源（2×→8K）的哈希/显存/带宽仍需专门评估，M1b 不承诺。
+  - 零拷贝下一步：DRI3 fence → Vulkan external semaphore、真实游戏/跨 GPU、GPU 侧 tile hash。
+  - `present` 计时含 vblank 等待；后续可加 `VK_KHR_present_wait`/显示延迟分析。
+- **M1c**：动画、托盘、Profile、自定义 effect（TOML + 预编译 SPIR-V + manifest）。
 
 ## 4. M2 及以后
 

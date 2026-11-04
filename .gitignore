@@ -87,6 +87,13 @@ coverage/
 *.coveragexml
 
 # =========================
+# 本地测试工具构建产物
+# =========================
+tools/testpattern
+tools/zero-copy/dri3-export
+tools/zero-copy/dri3-vulkan-import
+
+# =========================
 # agent输出的临时文档区，便于开发
 # =========================
 .agent
