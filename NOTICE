@@ -2,7 +2,7 @@ GemPrismUpscaler（宝石棱镜）
 Copyright (C) 2026 源宁 <sxyn_749@163.com> <https://github.com/YuanNing-96>
 
 本项目的架构与几何模型参考了 Magpie（https://github.com/Blinue/Magpie，GPL-3.0）。
-超分算法来自 Anime4K（https://github.com/bloc97/Anime4K，MIT）；`shaders/anime4k/Anime4K_Upscale_CNN_x2_S.glsl` 及其生成的 SPIR-V 是 Anime4K 的衍生作品，MIT 许可证见 `shaders/anime4k/LICENSE`。
+超分算法来自 Anime4K（https://github.com/bloc97/Anime4K，MIT）；`shaders/anime4k/Anime4K_Upscale_CNN_x2_{S,M,L}.glsl` 及其生成的 SPIR-V 是 Anime4K 的衍生作品，MIT 许可证见 `shaders/anime4k/LICENSE`。
 FSR 着色器尚未包含在本版本中（计划为后续版本，AMD FidelityFX，MIT）。
 
 第三方依赖：
