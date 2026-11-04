@@ -15,8 +15,10 @@
                 <CheckBox x:Name="StretchCheck" Content="拉伸填满（默认保持比例）" VerticalAlignment="Center"/>
                 <CheckBox x:Name="FollowFocusCheck" Content="跟随焦点（切到其他程序时收起）" IsChecked="True" VerticalAlignment="Center"/>
                 <TextBlock Text="超分算法" VerticalAlignment="Center" Foreground="#666" Margin="8,0,0,0"/>
-                <ComboBox x:Name="EffectCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="190">
-                    <ComboBoxItem Content="Anime4K 2× + Lanczos"/>
+                <ComboBox x:Name="EffectCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="230">
+                    <ComboBoxItem Content="Anime4K S 2× + Lanczos（默认）"/>
+                    <ComboBoxItem Content="Anime4K M 2× + Lanczos（质量档）"/>
+                    <ComboBoxItem Content="Anime4K L 2× + Lanczos（4K 可能不足 60fps）"/>
                     <ComboBoxItem Content="双线性（M0a）"/>
                 </ComboBox>
             </StackPanel>

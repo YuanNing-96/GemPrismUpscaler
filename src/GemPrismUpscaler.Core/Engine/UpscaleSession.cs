@@ -56,7 +56,7 @@ public sealed class UpscaleSession : IDisposable
     public bool IsOverlayVisible => _overlay?.IsVisible == true;
     public string OverlayTitle => "GemPrismOverlay";
     public string ExitReason => Volatile.Read(ref _exitReason);
-    public string EffectName => _effect == EffectMode.Anime4K ? "anime4k" : "bilinear";
+    public string EffectName => _effect.CliName();
     public MonitorInfo? Monitor => _monitor;
     public string MonitorName => _monitor?.Name ?? string.Empty;
 
@@ -67,7 +67,7 @@ public sealed class UpscaleSession : IDisposable
     public bool FollowFocus { get; set; } = true;
 
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
-        EffectMode effect = EffectMode.Anime4K, string? monitorName = null)
+        EffectMode effect = EffectMode.Anime4KS, string? monitorName = null)
     {
         _source = source;
         _mode = mode;

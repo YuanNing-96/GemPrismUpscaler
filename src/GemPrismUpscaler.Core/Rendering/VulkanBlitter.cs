@@ -64,7 +64,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
     public Extent2D SwapchainExtent => _swapchainExtent;
 
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
-        EffectMode effect = EffectMode.Anime4K)
+        EffectMode effect = EffectMode.Anime4KS)
     {
         _display = display;
         _window = window;
@@ -78,7 +78,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CreateSwapchain();
         CreateSyncAndCommands();
         CreateStagingBuffer();
-        if (_effect == EffectMode.Anime4K)
+        if (_effect.IsAnime4K())
         {
             _presenter = new LanczosPresenter(_vk, _device, _swapchainImages, _swapchainViews,
                 _swapchainFormat, _swapchainExtent);
@@ -529,7 +529,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
 
         Check(_vk.EndCommandBuffer(_commandBuffer), "EndCommandBuffer");
 
-        var waitStage = _effect == EffectMode.Anime4K
+        var waitStage = _effect.IsAnime4K()
             ? PipelineStageFlags.TransferBit | PipelineStageFlags.ComputeShaderBit | PipelineStageFlags.ColorAttachmentOutputBit
             : PipelineStageFlags.TransferBit;
         var cb = _commandBuffer;
@@ -639,9 +639,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
             AccessFlags.TransferWriteBit, AccessFlags.ShaderReadBit,
             PipelineStageFlags.TransferBit, PipelineStageFlags.ComputeShaderBit);
 
-        _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height);
+        _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height, _effect);
         _presenter!.SetSource(_anime4k.OutputView);
-        _anime4k.Record(_commandBuffer);
+        _anime4k.Record(_commandBuffer, new RectI(0, 0, width, height));
 
         bool firstUse = _swapchainFirstUse[imageIndex];
         _swapchainFirstUse[imageIndex] = false;

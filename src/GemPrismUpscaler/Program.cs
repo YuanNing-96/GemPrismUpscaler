@@ -162,7 +162,11 @@ sealed class Program
                 }
 
                 var mode = args.Any(a => a == "--stretch") ? ScalingMode.Stretch : ScalingMode.Fit;
-                var effect = EffectFromArgs(args);
+                if (!TryEffectFromArgs(args, out var effect, out string? effectError))
+                {
+                    Console.Error.WriteLine(effectError);
+                    return 2;
+                }
                 session = new UpscaleSession(info, mode, effect, monitorName)
                 {
                     FollowFocus = !args.Any(a => a == "--no-follow-focus")
@@ -215,7 +219,8 @@ sealed class Program
 
             options for --window:
               --monitor <name>          output monitor (auto follows the game by default)
-              --effect anime4k|bilinear default anime4k
+              --effect anime4k-s|anime4k-m|anime4k-l|bilinear
+                                        default anime4k-s; 'anime4k' is an alias for s
               --stretch                 stretch instead of preserving aspect ratio
               --no-follow-focus         keep the overlay when the game loses focus
             """);
@@ -227,14 +232,25 @@ sealed class Program
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
-    private static EffectMode EffectFromArgs(string[] args)
+    private static bool TryEffectFromArgs(string[] args, out EffectMode effect, out string? error)
     {
+        effect = EffectMode.Anime4KS;
+        error = null;
         int index = Array.IndexOf(args, "--effect");
-        if (index >= 0 && index + 1 < args.Length)
-            return args[index + 1].Equals("bilinear", StringComparison.OrdinalIgnoreCase)
-                ? EffectMode.Bilinear
-                : EffectMode.Anime4K;
-        return EffectMode.Anime4K;
+        if (index < 0) return true;
+        if (index + 1 >= args.Length)
+        {
+            error = "--effect requires a value (anime4k-s, anime4k-m, anime4k-l, bilinear)";
+            return false;
+        }
+
+        string value = args[index + 1];
+        if (!EffectModeExtensions.TryParse(value, out effect))
+        {
+            error = $"unknown effect '{value}'; use anime4k-s, anime4k-m, anime4k-l or bilinear";
+            return false;
+        }
+        return true;
     }
 
     private static ulong ParseId(string s)

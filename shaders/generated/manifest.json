@@ -1,60 +1,439 @@
 {
-  "passes": [
-    {
-      "name": "anime4k_conv0",
-      "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x3",
-      "inputs": [
-        "MAIN"
+  "generatedBy": "tools/build_shaders.py",
+  "variantOrder": [
+    "s",
+    "m",
+    "l"
+  ],
+  "variants": {
+    "s": {
+      "displayName": "Anime4K S",
+      "source": "Anime4K_Upscale_CNN_x2_S.glsl",
+      "radius": 5,
+      "textureCount": 6,
+      "pushConstantBytes": 72,
+      "textures": [
+        {
+          "name": "MAIN",
+          "scale": 1,
+          "external": true
+        },
+        {
+          "name": "conv2d_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_1_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_2_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_last_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "upscaled2x",
+          "scale": 2,
+          "external": false
+        }
       ],
-      "output": "conv2d_tf",
-      "scale": 1,
-      "shader": "anime4k_conv0.comp",
-      "spv": "anime4k_conv0.comp.spv"
+      "outputTexture": "upscaled2x",
+      "passes": [
+        {
+          "index": 0,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x3",
+          "inputs": [
+            "MAIN"
+          ],
+          "output": "conv2d_tf",
+          "outputScale": 1,
+          "shader": "anime4k_s_p0.comp.spv"
+        },
+        {
+          "index": 1,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_tf"
+          ],
+          "output": "conv2d_1_tf",
+          "outputScale": 1,
+          "shader": "anime4k_s_p1.comp.spv"
+        },
+        {
+          "index": 2,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_1_tf"
+          ],
+          "output": "conv2d_2_tf",
+          "outputScale": 1,
+          "shader": "anime4k_s_p2.comp.spv"
+        },
+        {
+          "index": 3,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_2_tf"
+          ],
+          "output": "conv2d_last_tf",
+          "outputScale": 1,
+          "shader": "anime4k_s_p3.comp.spv"
+        },
+        {
+          "index": 4,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Depth-to-Space",
+          "inputs": [
+            "conv2d_last_tf",
+            "MAIN"
+          ],
+          "output": "upscaled2x",
+          "outputScale": 2,
+          "shader": "anime4k_s_p4.comp.spv"
+        }
+      ]
     },
-    {
-      "name": "anime4k_conv1",
-      "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
-      "inputs": [
-        "conv2d_tf"
+    "m": {
+      "displayName": "Anime4K M",
+      "source": "Anime4K_Upscale_CNN_x2_M.glsl",
+      "radius": 8,
+      "textureCount": 10,
+      "pushConstantBytes": 104,
+      "textures": [
+        {
+          "name": "MAIN",
+          "scale": 1,
+          "external": true
+        },
+        {
+          "name": "conv2d_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_1_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_2_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_3_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_4_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_5_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_6_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_last_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "upscaled2x",
+          "scale": 2,
+          "external": false
+        }
       ],
-      "output": "conv2d_1_tf",
-      "scale": 1,
-      "shader": "anime4k_conv1.comp",
-      "spv": "anime4k_conv1.comp.spv"
+      "outputTexture": "upscaled2x",
+      "passes": [
+        {
+          "index": 0,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x3",
+          "inputs": [
+            "MAIN"
+          ],
+          "output": "conv2d_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p0.comp.spv"
+        },
+        {
+          "index": 1,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_tf"
+          ],
+          "output": "conv2d_1_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p1.comp.spv"
+        },
+        {
+          "index": 2,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_1_tf"
+          ],
+          "output": "conv2d_2_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p2.comp.spv"
+        },
+        {
+          "index": 3,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_2_tf"
+          ],
+          "output": "conv2d_3_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p3.comp.spv"
+        },
+        {
+          "index": 4,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_3_tf"
+          ],
+          "output": "conv2d_4_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p4.comp.spv"
+        },
+        {
+          "index": 5,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_4_tf"
+          ],
+          "output": "conv2d_5_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p5.comp.spv"
+        },
+        {
+          "index": 6,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x3x3x8",
+          "inputs": [
+            "conv2d_5_tf"
+          ],
+          "output": "conv2d_6_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p6.comp.spv"
+        },
+        {
+          "index": 7,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Conv-4x1x1x56",
+          "inputs": [
+            "conv2d_tf",
+            "conv2d_1_tf",
+            "conv2d_2_tf",
+            "conv2d_3_tf",
+            "conv2d_4_tf",
+            "conv2d_5_tf",
+            "conv2d_6_tf"
+          ],
+          "output": "conv2d_last_tf",
+          "outputScale": 1,
+          "shader": "anime4k_m_p7.comp.spv"
+        },
+        {
+          "index": 8,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(M)-Depth-to-Space",
+          "inputs": [
+            "conv2d_last_tf",
+            "MAIN"
+          ],
+          "output": "upscaled2x",
+          "outputScale": 2,
+          "shader": "anime4k_m_p8.comp.spv"
+        }
+      ]
     },
-    {
-      "name": "anime4k_conv2",
-      "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
-      "inputs": [
-        "conv2d_1_tf"
+    "l": {
+      "displayName": "Anime4K L",
+      "source": "Anime4K_Upscale_CNN_x2_L.glsl",
+      "radius": 5,
+      "textureCount": 11,
+      "pushConstantBytes": 112,
+      "textures": [
+        {
+          "name": "MAIN",
+          "scale": 1,
+          "external": true
+        },
+        {
+          "name": "conv2d_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_tf1",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_1_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_1_tf1",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_2_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_2_tf1",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_last_tf",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_last_tf1",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "conv2d_last_tf2",
+          "scale": 1,
+          "external": false
+        },
+        {
+          "name": "upscaled2x",
+          "scale": 2,
+          "external": false
+        }
       ],
-      "output": "conv2d_2_tf",
-      "scale": 1,
-      "shader": "anime4k_conv2.comp",
-      "spv": "anime4k_conv2.comp.spv"
-    },
-    {
-      "name": "anime4k_conv3",
-      "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Conv-4x3x3x8",
-      "inputs": [
-        "conv2d_2_tf"
-      ],
-      "output": "conv2d_last_tf",
-      "scale": 1,
-      "shader": "anime4k_conv3.comp",
-      "spv": "anime4k_conv3.comp.spv"
-    },
-    {
-      "name": "anime4k_d2s",
-      "desc": "Anime4K-v3.2-Upscale-CNN-x2-(S)-Depth-to-Space",
-      "inputs": [
-        "conv2d_last_tf",
-        "MAIN"
-      ],
-      "output": "MAIN",
-      "scale": 2,
-      "shader": "anime4k_d2s.comp",
-      "spv": "anime4k_d2s.comp.spv"
+      "outputTexture": "upscaled2x",
+      "passes": [
+        {
+          "index": 0,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x3",
+          "inputs": [
+            "MAIN"
+          ],
+          "output": "conv2d_tf",
+          "outputScale": 1,
+          "shader": "anime4k_l_p0.comp.spv"
+        },
+        {
+          "index": 1,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x3",
+          "inputs": [
+            "MAIN"
+          ],
+          "output": "conv2d_tf1",
+          "outputScale": 1,
+          "shader": "anime4k_l_p1.comp.spv"
+        },
+        {
+          "index": 2,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_tf",
+            "conv2d_tf1"
+          ],
+          "output": "conv2d_1_tf",
+          "outputScale": 1,
+          "shader": "anime4k_l_p2.comp.spv"
+        },
+        {
+          "index": 3,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_tf",
+            "conv2d_tf1"
+          ],
+          "output": "conv2d_1_tf1",
+          "outputScale": 1,
+          "shader": "anime4k_l_p3.comp.spv"
+        },
+        {
+          "index": 4,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_1_tf",
+            "conv2d_1_tf1"
+          ],
+          "output": "conv2d_2_tf",
+          "outputScale": 1,
+          "shader": "anime4k_l_p4.comp.spv"
+        },
+        {
+          "index": 5,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_1_tf",
+            "conv2d_1_tf1"
+          ],
+          "output": "conv2d_2_tf1",
+          "outputScale": 1,
+          "shader": "anime4k_l_p5.comp.spv"
+        },
+        {
+          "index": 6,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_2_tf",
+            "conv2d_2_tf1"
+          ],
+          "output": "conv2d_last_tf",
+          "outputScale": 1,
+          "shader": "anime4k_l_p6.comp.spv"
+        },
+        {
+          "index": 7,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_2_tf",
+            "conv2d_2_tf1"
+          ],
+          "output": "conv2d_last_tf1",
+          "outputScale": 1,
+          "shader": "anime4k_l_p7.comp.spv"
+        },
+        {
+          "index": 8,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Conv-4x3x3x16",
+          "inputs": [
+            "conv2d_2_tf",
+            "conv2d_2_tf1"
+          ],
+          "output": "conv2d_last_tf2",
+          "outputScale": 1,
+          "shader": "anime4k_l_p8.comp.spv"
+        },
+        {
+          "index": 9,
+          "desc": "Anime4K-v3.2-Upscale-CNN-x2-(L)-Depth-to-Space",
+          "inputs": [
+            "conv2d_last_tf",
+            "conv2d_last_tf1",
+            "conv2d_last_tf2",
+            "MAIN"
+          ],
+          "output": "upscaled2x",
+          "outputScale": 2,
+          "shader": "anime4k_l_p9.comp.spv"
+        }
+      ]
     }
-  ]
+  }
 }

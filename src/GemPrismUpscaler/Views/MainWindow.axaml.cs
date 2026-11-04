@@ -114,7 +114,13 @@ public partial class MainWindow : Window
 
         StopSession("重新启动");
         var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
-        var effect = EffectCombo.SelectedIndex == 1 ? EffectMode.Bilinear : EffectMode.Anime4K;
+        var effect = EffectCombo.SelectedIndex switch
+        {
+            1 => EffectMode.Anime4KM,
+            2 => EffectMode.Anime4KL,
+            3 => EffectMode.Bilinear,
+            _ => EffectMode.Anime4KS
+        };
         string? monitorName = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
         var session = new UpscaleSession(info, mode, effect, monitorName)
         {

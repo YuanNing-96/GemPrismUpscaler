@@ -21,7 +21,12 @@ internal static unsafe class VulkanUtil
         throw new InvalidOperationException("no suitable memory type");
     }
 
-    public static byte[] LoadSpirv(string fileName)
+    public static byte[] LoadSpirv(string fileName) => LoadEmbeddedBytes(fileName);
+
+    public static string LoadEmbeddedText(string fileName) =>
+        System.Text.Encoding.UTF8.GetString(LoadEmbeddedBytes(fileName));
+
+    private static byte[] LoadEmbeddedBytes(string fileName)
     {
         var assembly = typeof(VulkanUtil).Assembly;
         string suffix = "." + fileName;
@@ -29,9 +34,9 @@ internal static unsafe class VulkanUtil
             .FirstOrDefault(n => n.EndsWith(suffix, StringComparison.Ordinal));
         if (resource is null)
             throw new InvalidOperationException(
-                $"embedded shader '{fileName}' not found; run tools/build_shaders.py");
+                $"embedded resource '{fileName}' not found; run tools/build_shaders.py");
         using var stream = assembly.GetManifestResourceStream(resource)
-            ?? throw new InvalidOperationException($"cannot open embedded shader '{resource}'");
+            ?? throw new InvalidOperationException($"cannot open embedded resource '{resource}'");
         using var memory = new MemoryStream();
         stream.CopyTo(memory);
         return memory.ToArray();
