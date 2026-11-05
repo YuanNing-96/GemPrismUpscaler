@@ -46,7 +46,7 @@ public sealed class X11Overlay : IDisposable
 
     public void Show()
     {
-        if (IsVisible) return;
+        if (_disposed || IsVisible) return;
         X11Native.XMapRaised(_display.Handle, Window);
         _display.Sync();
         IsVisible = true;
@@ -54,7 +54,7 @@ public sealed class X11Overlay : IDisposable
 
     public void Hide()
     {
-        if (!IsVisible) return;
+        if (_disposed || !IsVisible) return;
         X11Native.XUnmapWindow(_display.Handle, Window);
         _display.Sync();
         IsVisible = false;
@@ -64,7 +64,9 @@ public sealed class X11Overlay : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        X11Native.XDestroyWindow(_display.Handle, Window);
+        IsVisible = false;
+        if (Window != 0)
+            X11Native.XDestroyWindow(_display.Handle, Window);
         _display.Sync();
     }
 }

@@ -23,13 +23,20 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            Dispatcher.UIThread.UnhandledException += (_, e) =>
+            {
+                Log.Error("UI thread unhandled exception", e.Exception);
+                ErrorBus.Functional("ui", "界面出现未处理异常", e.Exception);
+                e.Handled = true;
+            };
+
             if (Program.ExistingInstance is { } existing)
             {
                 desktop.MainWindow = new AlreadyRunningWindow(existing);
             }
             else
             {
-                desktop.MainWindow = new MainWindow(Program.InstanceGuard);
+                desktop.MainWindow = new MainWindow(Program.InstanceGuard, Program.Config);
             }
 
             desktop.ShutdownRequested += (_, _) => Log.Write("app shutdown requested");

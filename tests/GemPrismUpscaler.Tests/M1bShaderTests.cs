@@ -9,25 +9,27 @@ public class M1bShaderTests
     [Fact]
     public void VersionIs021()
     {
-        Assert.Equal("0.2.1", AppInfo.Version);
-        Assert.Equal("GemPrismUpscaler v0.2.1", AppInfo.DisplayName);
+        Assert.Equal("0.2.2", AppInfo.Version);
+        Assert.Equal("GemPrismUpscaler v0.2.2", AppInfo.DisplayName);
     }
 
     [Fact]
     public void ManifestContainsSmlVariantsInOrder()
     {
         var manifest = Anime4KShaders.Manifest;
-        Assert.Equal(new[] { "s", "m", "l" }, manifest.VariantOrder);
-        Assert.Equal(3, manifest.Variants.Count);
+        Assert.Equal(new[] { "s", "m", "l", "vl" }, manifest.VariantOrder);
+        Assert.Equal(4, manifest.Variants.Count);
         Assert.Equal("Anime4K S", manifest.Variants["s"].DisplayName);
         Assert.Equal("Anime4K M", manifest.Variants["m"].DisplayName);
         Assert.Equal("Anime4K L", manifest.Variants["l"].DisplayName);
+        Assert.Equal("Anime4K VL", manifest.Variants["vl"].DisplayName);
     }
 
     [Theory]
     [InlineData("s", 5, 6, 5)]
     [InlineData("m", 9, 10, 8)]
     [InlineData("l", 10, 11, 5)]
+    [InlineData("vl", 18, 19, 8)]
     public void VariantShapeMatchesTheExpandedShader(string key, int passes, int textures, int radius)
     {
         var variant = Anime4KShaders.Manifest.Variants[key];
@@ -75,14 +77,17 @@ public class M1bShaderTests
     }
 
     [Fact]
-    public void PushConstantBlocksFitTheVulkanGuaranteedLimit()
+    public void PushConstantBlocksFitTheVulkanLimits()
     {
         foreach (var variant in Anime4KShaders.Manifest.Variants.Values)
         {
             int expected = 3 * 8 + variant.Textures.Count * 8;
             Assert.Equal(expected, variant.PushConstantBytes);
-            Assert.True(variant.PushConstantBytes <= 128,
+            Assert.True(variant.PushConstantBytes <= 256,
                 $"{variant.DisplayName}: {variant.PushConstantBytes} bytes");
+            if (variant.DisplayName != "Anime4K VL")
+                Assert.True(variant.PushConstantBytes <= 128,
+                    $"{variant.DisplayName}: {variant.PushConstantBytes} bytes");
         }
     }
 
@@ -91,6 +96,7 @@ public class M1bShaderTests
     [InlineData("anime4k-s", EffectMode.Anime4KS)]
     [InlineData("anime4k-m", EffectMode.Anime4KM)]
     [InlineData("anime4k-l", EffectMode.Anime4KL)]
+    [InlineData("anime4k-vl", EffectMode.Anime4KVL)]
     [InlineData("bilinear", EffectMode.Bilinear)]
     public void EffectAliasesParse(string value, EffectMode expected)
     {

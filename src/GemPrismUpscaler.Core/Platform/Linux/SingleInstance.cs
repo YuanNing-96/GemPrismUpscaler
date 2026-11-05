@@ -83,6 +83,12 @@ public sealed class SingleInstance : IDisposable
         set => _statusProvider = value;
     }
 
+    /// <summary>
+    /// Invoked when another GUI instance asks this process to come to the
+    /// foreground. Null means this process has no UI (CLI session).
+    /// </summary>
+    public Action? ActivationRequested { get; set; }
+
     public InstanceInfo CurrentInfo
     {
         get
@@ -166,16 +172,32 @@ public sealed class SingleInstance : IDisposable
         return TryQueryPath(path ?? GetSocketPath(), timeoutMs);
     }
 
+    /// <summary>
+    /// Asks the existing GUI instance to activate. Returns false when the
+    /// existing process is a CLI session or does not answer.
+    /// </summary>
+    public static bool TryActivate(string? path = null, int timeoutMs = 500)
+    {
+        string response = SendCommand(path ?? GetSocketPath(), "ACTIVATE", timeoutMs);
+        return response.StartsWith("ok", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static InstanceInfo? TryQueryPath(string path, int timeoutMs)
+    {
+        string text = SendCommand(path, "STATUS", timeoutMs);
+        return ParseStatus(text);
+    }
+
+    private static string SendCommand(string path, string command, int timeoutMs)
     {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
             var connect = socket.ConnectAsync(new UnixDomainSocketEndPoint(path));
-            if (!connect.Wait(timeoutMs)) return null;
+            if (!connect.Wait(timeoutMs)) return string.Empty;
             socket.SendTimeout = timeoutMs;
             socket.ReceiveTimeout = timeoutMs;
-            socket.Send(Encoding.UTF8.GetBytes("STATUS\n"));
+            socket.Send(Encoding.UTF8.GetBytes(command + "\n"));
 
             var buffer = new byte[MaxPacket];
             var text = new StringBuilder();
@@ -186,11 +208,11 @@ public sealed class SingleInstance : IDisposable
                 text.Append(Encoding.UTF8.GetString(buffer, 0, read));
                 if (text.ToString().Contains('\n')) break;
             }
-            return ParseStatus(text.ToString());
+            return text.ToString();
         }
         catch
         {
-            return null;
+            return string.Empty;
         }
     }
 
@@ -236,9 +258,34 @@ public sealed class SingleInstance : IDisposable
                 }
 
                 string command = text.ToString().Trim();
-                string response = command.Equals("STATUS", StringComparison.OrdinalIgnoreCase)
-                    ? FormatStatus(CurrentInfo)
-                    : "error unknown-command\n";
+                string response;
+                if (command.Equals("STATUS", StringComparison.OrdinalIgnoreCase))
+                {
+                    response = FormatStatus(CurrentInfo);
+                }
+                else if (command.Equals("ACTIVATE", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (ActivationRequested is null)
+                    {
+                        response = "error no-ui\n";
+                    }
+                    else
+                    {
+                        try
+                        {
+                            ActivationRequested();
+                            response = "ok\n";
+                        }
+                        catch (Exception ex)
+                        {
+                            response = $"error {ex.GetType().Name}\n";
+                        }
+                    }
+                }
+                else
+                {
+                    response = "error unknown-command\n";
+                }
                 client.Send(Encoding.UTF8.GetBytes(response));
             }
             catch

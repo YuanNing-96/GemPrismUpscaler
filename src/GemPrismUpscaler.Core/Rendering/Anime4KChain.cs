@@ -23,9 +23,8 @@ namespace GemPrismUpscaler.Core.Rendering;
 /// </summary>
 internal sealed unsafe class Anime4KChain : IDisposable
 {
-    private const int MaxTextures = 13;
-    private const int PushConstantLimit = 128;
-    private const int MaxInputsPerPass = 8;
+    private const int MaxTextures = 19;
+    private const int MaxInputsPerPass = 16;
 
     private static readonly byte[] EntryPoint = "main\0"u8.ToArray();
 
@@ -36,6 +35,7 @@ internal sealed unsafe class Anime4KChain : IDisposable
     private readonly int _sourceWidth;
     private readonly int _sourceHeight;
     private readonly Anime4KVariant _variant;
+    private readonly uint _maxPushConstants;
     private readonly Dictionary<string, Anime4KTexture> _textureMap;
 
     private readonly Dictionary<string, Image> _images = new();
@@ -53,7 +53,7 @@ internal sealed unsafe class Anime4KChain : IDisposable
     private bool _disposed;
 
     public Anime4KChain(Vk vk, Device device, PhysicalDevice physicalDevice, ImageView sourceView,
-        int sourceWidth, int sourceHeight, EffectMode effect)
+        int sourceWidth, int sourceHeight, Anime4KVariant variant, uint maxPushConstants)
     {
         _vk = vk;
         _device = device;
@@ -61,7 +61,8 @@ internal sealed unsafe class Anime4KChain : IDisposable
         _sourceView = sourceView;
         _sourceWidth = sourceWidth;
         _sourceHeight = sourceHeight;
-        _variant = Anime4KShaders.For(effect);
+        _variant = variant;
+        _maxPushConstants = maxPushConstants;
         _textureMap = _variant.Textures.ToDictionary(t => t.Name, StringComparer.Ordinal);
         _pushSize = 3 * 8 + _variant.Textures.Count * 8;
 
@@ -103,11 +104,11 @@ internal sealed unsafe class Anime4KChain : IDisposable
                 $"Anime4K variant has {_variant.Textures.Count} textures (limit {MaxTextures})");
         if (!_textureMap.TryGetValue(_variant.OutputTexture, out var output) || output.External)
             throw new InvalidOperationException("Anime4K variant has an invalid output texture");
-        if (output.Scale != 2)
-            throw new InvalidOperationException("Anime4K output texture must be 2x");
-        if (_pushSize > PushConstantLimit)
+        if (output.Scale is < 1 or > 4)
+            throw new InvalidOperationException("Anime4K output texture must be 1x-4x");
+        if (_pushSize > _maxPushConstants)
             throw new InvalidOperationException(
-                $"Anime4K push constant block is {_pushSize} bytes (limit {PushConstantLimit})");
+                $"Anime4K push constant block is {_pushSize} bytes (device limit {_maxPushConstants})");
 
         foreach (var pass in _variant.Passes)
         {
@@ -307,7 +308,7 @@ internal sealed unsafe class Anime4KChain : IDisposable
 
     private void CreateComputePipeline(int index, string shaderName)
     {
-        var code = VulkanUtil.LoadSpirv(shaderName);
+        var code = LoadShader(shaderName);
         ShaderModule module;
         fixed (byte* codePtr = code)
         {
@@ -348,6 +349,16 @@ internal sealed unsafe class Anime4KChain : IDisposable
         {
             _vk.DestroyShaderModule(_device, module, null);
         }
+    }
+
+    private byte[] LoadShader(string shaderName)
+    {
+        if (!string.IsNullOrWhiteSpace(_variant.ShaderDirectory))
+        {
+            string path = Path.Combine(_variant.ShaderDirectory, shaderName);
+            return File.ReadAllBytes(path);
+        }
+        return VulkanUtil.LoadSpirv(shaderName);
     }
 
     private void UpdateDescriptors()

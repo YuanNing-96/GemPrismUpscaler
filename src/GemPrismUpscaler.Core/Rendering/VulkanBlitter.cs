@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using Silk.NET.Core;
@@ -23,7 +24,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private readonly ulong _window;
     private readonly int _outputWidth;
     private readonly int _outputHeight;
-    private readonly EffectMode _effect;
+    private readonly EffectDefinition _effect;
+    private uint _maxPushConstants = 128;
 
     private Vk _vk = null!;
     private Instance _instance;
@@ -90,13 +92,13 @@ public sealed unsafe class VulkanBlitter : IDisposable
     public int DirtyHalo => _anime4k?.Radius ?? 0;
 
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
-        EffectMode effect = EffectMode.Anime4KS)
+        EffectDefinition? effect = null)
     {
         _display = display;
         _window = window;
         _outputWidth = outputWidth;
         _outputHeight = outputHeight;
-        _effect = effect;
+        _effect = effect ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
         CreateInstance();
         CreateSurface();
         PickDevice();
@@ -105,7 +107,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         CreateSyncAndCommands();
         CreateTimestampPool();
         CreateStagingBuffer();
-        if (_effect.IsAnime4K())
+        if (_effect.IsCompute)
         {
             CreateComposedImage();
             _presenter = new LanczosPresenter(_vk, _device, _composedView,
@@ -133,7 +135,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
 
             var extensions = new[] { "VK_KHR_surface", "VK_KHR_xlib_surface" };
             var extPtrs = extensions.Select(Marshal.StringToHGlobalAnsi).ToArray();
-            var layers = new[] { "VK_LAYER_KHRONOS_validation" };
+            bool enableValidation = DiagnosticsRuntime.ValidationLayerEnabled;
+            var layers = enableValidation ? new[] { "VK_LAYER_KHRONOS_validation" } : Array.Empty<string>();
             var layerPtrs = layers.Select(Marshal.StringToHGlobalAnsi).ToArray();
             var ep = GCHandle.Alloc(extPtrs, GCHandleType.Pinned);
             var lp = GCHandle.Alloc(layerPtrs, GCHandleType.Pinned);
@@ -146,12 +149,13 @@ public sealed unsafe class VulkanBlitter : IDisposable
                     EnabledExtensionCount = (uint)extPtrs.Length,
                     PpEnabledExtensionNames = (byte**)ep.AddrOfPinnedObject(),
                     EnabledLayerCount = (uint)layerPtrs.Length,
-                    PpEnabledLayerNames = (byte**)lp.AddrOfPinnedObject()
+                    PpEnabledLayerNames = layerPtrs.Length == 0 ? null : (byte**)lp.AddrOfPinnedObject()
                 };
 
                 Result r = _vk.CreateInstance(&ci, null, out _instance);
-                if (r != Result.Success)
+                if (r != Result.Success && enableValidation)
                 {
+                    Log.Warn("Vulkan 校验层不可用，回退为无校验层创建实例");
                     ci.EnabledLayerCount = 0;
                     ci.PpEnabledLayerNames = null;
                     r = _vk.CreateInstance(&ci, null, out _instance);
@@ -233,6 +237,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (best.Handle == 0) throw new InvalidOperationException("no suitable Vulkan device");
         _physicalDevice = best;
         _vk.GetPhysicalDeviceProperties(_physicalDevice, out var chosen);
+        _maxPushConstants = chosen.Limits.MaxPushConstantsSize;
         DeviceName = $"{chosen.DeviceType} vendor=0x{chosen.VendorID:x}";
         try
         {
@@ -660,7 +665,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         if (acquire != Result.Success && acquire != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkAcquireNextImageKHR failed: {acquire}");
 
-        bool fullFrame = dirty is null || dirty.FullFrame || !_effect.IsAnime4K();
+        bool fullFrame = dirty is null || dirty.FullFrame || !_effect.IsCompute;
         var uploadClock = Stopwatch.StartNew();
         if (!fullFrame && dirty!.UploadRects.Count > 0)
             CopyTilesToStaging(frame, width, height, stride, dirty.UploadRects);
@@ -680,7 +685,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
             _vk.CmdResetQueryPool(_commandBuffer, _timestampPool, 0, 4);
         WriteTimestamp(PipelineStageFlags.TopOfPipeBit, 0);
 
-        if (!_effect.IsAnime4K())
+        if (!_effect.IsCompute)
             RecordBilinear(imageIndex, width, height, destRect);
         else
             RecordAnime4K(imageIndex, width, height, destRect, dirty, fullFrame);
@@ -690,7 +695,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         LastEffectCpuMs = effectClock.Elapsed.TotalMilliseconds;
         _hasPendingTimestamps = _timestampsAvailable;
 
-        var waitStage = _effect.IsAnime4K()
+        var waitStage = _effect.IsCompute
             ? PipelineStageFlags.TransferBit | PipelineStageFlags.ComputeShaderBit | PipelineStageFlags.ColorAttachmentOutputBit
             : PipelineStageFlags.TransferBit;
         var presentClock = Stopwatch.StartNew();
@@ -810,7 +815,10 @@ public sealed unsafe class VulkanBlitter : IDisposable
             PipelineStageFlags.TransferBit, PipelineStageFlags.ComputeShaderBit);
         WriteTimestamp(PipelineStageFlags.TransferBit, 1);
 
-        _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height, _effect);
+        if (_effect.Variant is null)
+            throw new InvalidOperationException($"effect '{_effect.Id}' has no compute variant");
+        _anime4k ??= new Anime4KChain(_vk, _device, _physicalDevice, _sourceView, width, height,
+            _effect.Variant, _maxPushConstants);
         _presenter!.SetSource(_anime4k.OutputView);
         if (fullFrame || dirty is null)
             _anime4k.Record(_commandBuffer, new RectI(0, 0, width, height));

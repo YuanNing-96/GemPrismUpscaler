@@ -65,7 +65,7 @@ public sealed class X11Display : IDisposable
             int code = Marshal.ReadByte(errorEvent, 32);
             int req = Marshal.ReadByte(errorEvent, 33);
             int minor = Marshal.ReadByte(errorEvent, 34);
-            Log.Write($"X error code={code} request={req}.{minor}");
+            ErrorBus.Warning("x11", $"X error code={code} request={req}.{minor}");
         }
         catch { }
         return 0;

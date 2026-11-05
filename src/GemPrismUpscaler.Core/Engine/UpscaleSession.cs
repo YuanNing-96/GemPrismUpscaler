@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
@@ -26,7 +27,8 @@ public sealed class UpscaleSession : IDisposable
 
     private readonly WindowInfo _source;
     private readonly ScalingMode _mode;
-    private readonly EffectMode _effect;
+    private readonly EffectDefinition _effect;
+    private readonly HotkeyBinding _hotkeyBinding;
     private readonly ManualResetEventSlim _started = new(false);
     private readonly OverlayVisibility _visibility = new();
     private Thread? _thread;
@@ -51,6 +53,8 @@ public sealed class UpscaleSession : IDisposable
     private int _screenWidth;
     private int _screenHeight;
     private string _exitReason = string.Empty;
+    private int _toggleRequested;
+    private int _userHiddenRequest = -1;
 
     public event Action<string>? Message;
 
@@ -60,7 +64,7 @@ public sealed class UpscaleSession : IDisposable
     public bool IsOverlayVisible => _overlay?.IsVisible == true;
     public string OverlayTitle => "GemPrismOverlay";
     public string ExitReason => Volatile.Read(ref _exitReason);
-    public string EffectName => _effect.CliName();
+    public string EffectName => _effect.Id;
     public MonitorInfo? Monitor => _monitor;
     public string MonitorName => _monitor?.Name ?? string.Empty;
 
@@ -75,14 +79,16 @@ public sealed class UpscaleSession : IDisposable
 
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
         EffectMode effect = EffectMode.Anime4KS, string? monitorName = null,
-        int outputWidthOverride = 0, int outputHeightOverride = 0)
+        int outputWidthOverride = 0, int outputHeightOverride = 0,
+        HotkeyBinding? hotkey = null, EffectDefinition? effectDefinition = null)
     {
         _source = source;
         _mode = mode;
-        _effect = effect;
+        _effect = effectDefinition ?? EffectRegistry.BuiltIn(effect);
         _manualMonitorName = monitorName;
         _outputWidthOverride = outputWidthOverride;
         _outputHeightOverride = outputHeightOverride;
+        _hotkeyBinding = hotkey ?? HotkeyBinding.Default;
     }
 
     public void Start()
@@ -109,6 +115,12 @@ public sealed class UpscaleSession : IDisposable
             SetExitReason("stopped");
     }
 
+    /// <summary>Thread-safe request used by the tray menu/hotkey path.</summary>
+    public void RequestToggleVisibility() => Interlocked.Exchange(ref _toggleRequested, 1);
+
+    /// <summary>Thread-safe request to force the overlay hidden/shown.</summary>
+    public void RequestUserHidden(bool hidden) => Interlocked.Exchange(ref _userHiddenRequest, hidden ? 1 : 0);
+
     private void Run()
     {
         try
@@ -121,6 +133,7 @@ public sealed class UpscaleSession : IDisposable
         {
             _initError ??= ex;
             SetExitReason($"engine error: {ex.GetType().Name}: {ex.Message}");
+            ErrorBus.Functional("engine", "引擎启动失败", ex);
             _started.Set();
         }
         finally
@@ -164,7 +177,9 @@ public sealed class UpscaleSession : IDisposable
         _capture = new X11Capture(_display, _source.WindowId, geometry.Value.Width, geometry.Value.Height);
         _damage = new X11Damage(_display, _source.WindowId);
         _input = new X11Input(_display, _source.WindowId);
-        _hotkey = new X11Hotkey(_display);
+        _hotkey = new X11Hotkey(_display, _hotkeyBinding);
+        if (!_hotkey.IsGrabbed)
+            ErrorBus.Functional("hotkey", _hotkey.Error ?? $"热键 {_hotkeyBinding} 未能注册");
         _blitter = new VulkanBlitter(_display, _overlay.Window, _monitor.Value.Width, _monitor.Value.Height, _effect);
 
         // Starting the upscaler from the config UI leaves focus on our window.
@@ -220,6 +235,7 @@ public sealed class UpscaleSession : IDisposable
 
         while (!_stop)
         {
+            ApplyPendingVisibilityRequests(ref dirty);
             ProcessEvents(ref dirty);
 
             if (_blitter is null || _capture is null || _overlay is null || _display is null || _input is null)
@@ -295,7 +311,7 @@ public sealed class UpscaleSession : IDisposable
 
                     DirtyFrame? dirtyFrame = null;
                     double diffMs = 0;
-                    if (DirtyRectEnabled && _effect.IsAnime4K())
+                    if (DirtyRectEnabled && _effect.IsCompute && !_effect.RequiresFullFrame)
                     {
                         var diffClock = Stopwatch.StartNew();
                         dirtyFrame = _diff.Update(_capture.Pixels, _capture.Width, _capture.Height,
@@ -343,6 +359,31 @@ public sealed class UpscaleSession : IDisposable
         }
 
         Emit($"engine loop exited ({_visibility.ReasonText})");
+    }
+
+    private void ApplyPendingVisibilityRequests(ref bool dirty)
+    {
+        if (_overlay is null) return;
+
+        int toggle = Interlocked.Exchange(ref _toggleRequested, 0);
+        int hidden = Interlocked.Exchange(ref _userHiddenRequest, -1);
+        if (toggle == 0 && hidden < 0) return;
+
+        if (toggle != 0)
+            _visibility.UserHidden = !_visibility.UserHidden;
+        if (hidden >= 0)
+            _visibility.UserHidden = hidden == 1;
+
+        if (!_visibility.UserHidden)
+        {
+            FocusSource();
+            _visibility.FocusLost = false;
+            _focusedOnce = true;
+        }
+
+        ApplyVisibility();
+        dirty = true;
+        Emit(_visibility.UserHidden ? "visibility: overlay hidden (user)" : "visibility: overlay shown (user)");
     }
 
     private void ProcessEvents(ref bool dirty)
@@ -628,6 +669,10 @@ public sealed class UpscaleSession : IDisposable
     private void FocusSource()
     {
         if (_display is null) return;
+        // The source may have been destroyed/unmapped between poll and focus;
+        // XSetInputFocus on a dead window produces a non-fatal BadMatch.
+        var state = X11WindowProbe.GetState(_display, _source.WindowId);
+        if (!state.Exists || !state.Viewable) return;
         X11WindowProbe.Activate(_display, _source.WindowId);
         X11Native.XSetInputFocus(_display.Handle, _source.WindowId, X11Native.RevertToParent, 0);
         _display.Sync();

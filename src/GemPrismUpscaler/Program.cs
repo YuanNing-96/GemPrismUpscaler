@@ -1,4 +1,5 @@
 using Avalonia;
+using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
@@ -18,10 +19,28 @@ sealed class Program
 {
     internal static SingleInstance? InstanceGuard { get; private set; }
     internal static InstanceInfo? ExistingInstance { get; private set; }
+    internal static AppConfig Config { get; private set; } = AppConfig.CreateDefault();
+
+    private static bool _configLoaded;
 
     [STAThread]
     public static void Main(string[] args)
     {
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex)
+            {
+                Log.Error("unhandled exception", ex);
+                ErrorBus.Functional("app", "程序出现未处理异常", ex);
+            }
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            Log.Error("unobserved task exception", e.Exception);
+            ErrorBus.Warning("app", "后台任务出现未观察异常", e.Exception);
+            e.SetObserved();
+        };
+
         if (args.Length > 0 && args[0] == "--status")
         {
             Environment.Exit(RunStatus());
@@ -35,10 +54,18 @@ sealed class Program
             return;
         }
 
-        // GUI launch. A second GUI instance must only report an error; it must
-        // never activate or disturb the existing window (that is a later setting).
+        EnsureConfiguration(args);
+
+        // GUI launch. A second GUI instance must only report an error or, when
+        // configured, ask the existing instance to come forward.
         if (!SingleInstance.TryAcquire(InstanceMode.Gui, out var guard, out var existing))
         {
+            if (Config.General.SecondInstance == "activate" && SingleInstance.TryActivate())
+            {
+                Log.Info("second GUI activated the existing instance");
+                return;
+            }
+
             ExistingInstance = existing;
             ReportExistingInstance(existing, gui: true);
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -124,6 +151,8 @@ sealed class Program
                 return 2;
             }
 
+            EnsureConfiguration(args);
+
             ulong id = ParseId(args[1]);
             var info = X11WindowEnumerator.List(display).FirstOrDefault(w => w.WindowId == id);
             if (info is null)
@@ -133,6 +162,9 @@ sealed class Program
             }
 
             string? monitorName = GetOption(args, "--monitor");
+            if (string.IsNullOrWhiteSpace(monitorName) &&
+                !string.Equals(Config.Display.Monitor, "auto", StringComparison.OrdinalIgnoreCase))
+                monitorName = Config.Display.Monitor;
             if (!string.IsNullOrWhiteSpace(monitorName))
             {
                 var monitor = X11MonitorEnumerator.List(display)
@@ -161,7 +193,10 @@ sealed class Program
                         session?.IsRunning == true, session?.MonitorName);
                 }
 
-                var mode = args.Any(a => a == "--stretch") ? ScalingMode.Stretch : ScalingMode.Fit;
+                var mode = args.Any(a => a == "--stretch") ||
+                           string.Equals(Config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+                    ? ScalingMode.Stretch
+                    : ScalingMode.Fit;
                 if (!TryEffectFromArgs(args, out var effect, out string? effectError))
                 {
                     Console.Error.WriteLine(effectError);
@@ -177,10 +212,18 @@ sealed class Program
                     return 2;
                 }
 
-                session = new UpscaleSession(info, mode, effect, monitorName, outputWidth, outputHeight)
+                var hotkey = HotkeyBinding.Default;
+                if (!HotkeyBinding.TryParse(Config.Hotkey.ToggleOverlay, out hotkey, out string? hotkeyError))
                 {
-                    FollowFocus = !args.Any(a => a == "--no-follow-focus"),
-                    DirtyRectEnabled = !args.Any(a => a == "--no-dirty-rect")
+                    Log.Warn($"config hotkey invalid ({hotkeyError}); using {HotkeyBinding.Default}");
+                    hotkey = HotkeyBinding.Default;
+                }
+
+                session = new UpscaleSession(info, mode, effect.Mode, monitorName, outputWidth, outputHeight,
+                    hotkey, effect)
+                {
+                    FollowFocus = !args.Any(a => a == "--no-follow-focus") && Config.General.FollowFocus,
+                    DirtyRectEnabled = !args.Any(a => a == "--no-dirty-rect") && Config.Effect.DirtyRect
                 };
                 session.Message += m => Console.WriteLine(m);
 
@@ -228,9 +271,12 @@ sealed class Program
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
 
+            global options:
+              --dev                     force developer mode (debug logs, diagnostics)
+
             options for --window:
               --monitor <name>          output monitor (auto follows the game by default)
-              --effect anime4k-s|anime4k-m|anime4k-l|bilinear
+              --effect anime4k-s|anime4k-m|anime4k-l|anime4k-vl|bilinear
                                         default anime4k-s; 'anime4k' is an alias for s
               --stretch                 stretch instead of preserving aspect ratio
               --no-follow-focus         keep the overlay when the game loses focus
@@ -256,24 +302,63 @@ sealed class Program
         return width is >= 320 and <= 16384 && height is >= 240 and <= 16384;
     }
 
-    private static bool TryEffectFromArgs(string[] args, out EffectMode effect, out string? error)
+    private static void EnsureConfiguration(string[] args)
     {
-        effect = EffectMode.Anime4KS;
+        if (_configLoaded) return;
+        _configLoaded = true;
+
+        var result = ConfigStore.Load();
+        Config = result.Config;
+        if (args.Any(a => a == "--dev"))
+            Config.Diagnostics.DeveloperMode = true;
+
+        Log.Configure(Config.Logging.Path, Config.Logging.Level);
+        if (Config.Diagnostics.DeveloperMode) Log.Level = LogLevel.Debug;
+        DiagnosticsRuntime.Configure(Config);
+
+        foreach (string warning in result.Warnings)
+            Log.Warn($"config: {warning}");
+        if (!string.IsNullOrWhiteSpace(result.Error))
+            ErrorBus.Functional("config", result.Error);
+
+        Log.Info($"config loaded path={result.Path} schema={Config.Schema} " +
+                 $"fileExisted={result.FileExisted} recovered={result.RecoveredFromError} " +
+                 DiagnosticsRuntime.Describe());
+    }
+
+    private static bool TryEffectFromArgs(string[] args, out EffectDefinition effect, out string? error)
+    {
+        effect = EffectRegistry.Resolve(Config.Effect.Default);
+        if (!effect.IsAvailable)
+        {
+            Log.Warn($"config effect.default='{Config.Effect.Default}' unavailable ({effect.UnavailableReason}); using anime4k-s");
+            effect = EffectRegistry.BuiltIn(EffectMode.Anime4KS);
+        }
+
         error = null;
         int index = Array.IndexOf(args, "--effect");
         if (index < 0) return true;
         if (index + 1 >= args.Length)
         {
-            error = "--effect requires a value (anime4k-s, anime4k-m, anime4k-l, bilinear)";
+            error = "--effect requires a value (built-in id or a custom effect id)";
             return false;
         }
 
         string value = args[index + 1];
-        if (!EffectModeExtensions.TryParse(value, out effect))
+        var found = EffectRegistry.Find(value);
+        if (found is null)
         {
-            error = $"unknown effect '{value}'; use anime4k-s, anime4k-m, anime4k-l or bilinear";
+            string available = string.Join(", ", EffectRegistry.All.Select(e => e.Id));
+            error = $"unknown effect '{value}'; available: {available}";
             return false;
         }
+        if (!found.IsAvailable)
+        {
+            error = $"effect '{value}' is unavailable: {found.UnavailableReason}";
+            return false;
+        }
+
+        effect = found;
         return true;
     }
 

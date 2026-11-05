@@ -23,6 +23,12 @@ internal sealed class Anime4KVariant
     public List<Anime4KTexture> Textures { get; set; } = new();
     public string OutputTexture { get; set; } = string.Empty;
     public List<Anime4KPass> Passes { get; set; } = new();
+
+    /// <summary>Set for custom effects; shader names are relative to this directory.</summary>
+    internal string? ShaderDirectory { get; set; }
+
+    /// <summary>Custom effect opt-out of dirty-rect rendering.</summary>
+    internal bool RequiresFullFrame { get; set; }
 }
 
 internal sealed class Anime4KTexture

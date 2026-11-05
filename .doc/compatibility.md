@@ -25,9 +25,13 @@
 | NVIDIA 专有驱动 | 已验证 | RTX 4060 Laptop，Vulkan 1.4 |
 | AMD/Intel Vulkan | 未验证 | 代码按标准 Vulkan 编写，未实机测试 |
 | 混合显卡 | 部分支持 | 捕获走 CPU；effect 选择 DiscreteGpu/NVIDIA；跨 GPU 未验证 |
-| Anime4K S/M/L 2× + Lanczos-2 | 支持 | manifest 驱动 N-pass；默认 S，M/L 为质量档 |
+| Anime4K S/M/L/VL 2× + Lanczos-2 | 支持 | manifest 驱动 N-pass；默认 S，M/L 为质量档，VL 为实验最高画质档（18 pass/19 纹理/176B push constant） |
 | 双线性 | 支持 | 回退/对比 |
-| 分块脏矩形 | 支持 | 64px 哈希 + CNN halo + 持久合成图；`--no-dirty-rect` 可关闭 |
+| 自定义 effect | 支持 | TOML + 预编译 SPIR-V；ABI v1；运行时不需要 glslang；只支持 compute pass + 内置 Lanczos-2 收尾 |
+| 设置/配置 | 支持 | TOML 持久化；热键/日志/第二实例/默认显示器/默认效果/缩放/托盘/开发模式 |
+| Profile | 支持 | WM_CLASS / `/proc/<pid>/exe` / Wine cmdline；先匹配先赢 |
+| 托盘 | 可选 | KDE/XFCE/Cinnamon/MATE/Ubuntu GNOME（AppIndicator）等；GNOME 无扩展时不创建，应用仍正常 |
+| 分块脏矩形 | 支持 | 64px 哈希 + CNN halo + 持久合成图；`--no-dirty-rect` 可关闭；自定义 effect 可 `requires_full_frame` |
 | 分段指标 / CSV | 支持 | capture/diff/upload/effect/present、GPU timestamp、NVML、CPU、p95 |
 | 零拷贝（DRI3/DMA-BUF） | spike 完成 | 线性 1-fd GPU 窗口可导入；2-fd/DCC 需回退；未进默认链路 |
 | FSR1 / NIS / Lanczos-3 / Bicubic | 未排期 | 有需求再评估 |
@@ -66,9 +70,11 @@
 5. **4K 源**：2× 后是 8K，显存/带宽显著上升；M1b 仍只承诺常见 VN 分辨率（720p/1024×768/1080p）。脏矩形哈希 720p 约 1ms/帧，4K 源约 4 倍。
 6. **黑边输入**：非 stretch（fit）时左右/上下黑边不转发鼠标点击和滚轮，这是预期行为，因为黑边不是源窗口像素；stretch 后原黑边区域被画面覆盖，会正常转发。
 7. **swapchain resize**：M1a 在显示器变化时重建 overlay/blitter；源窗口 resize 会重建 capture，但显示模式本身的 swapchain recreation 仍不完整。
-8. **单实例**：M1a 第二实例只提示错误；激活已有窗口是 M1c 设置项。
-9. **设置界面**：M1a 没有完整设置界面；热键、日志路径、默认显示器等见 backlog/M1c。
-10. **自定义 shader**：M1b 内置 S/M/L；自定义 shader 的运行时策略在 M1c 决定。
+8. **单实例**：默认第二实例只提示错误；设置可改为激活已有 GUI；第二个 CLI 仍报错。KDE Wayland 下激活使用 KWin 脚本兜底。
+9. **设置界面**：M1c 已实现；设置持久化在 `~/.config/GemPrismUpscaler/config.toml`，`GEMPRISM_CONFIG` 可覆盖。
+10. **自定义 shader**：M1c 支持 TOML + 预编译 SPIR-V 的 compute pass 链；不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 256B（设备可能更低）。
+11. **VL**：实验最高画质档，18 pass/19 纹理；720p 源/4K 输出下首帧 effect CPU 约 466ms（含 pipeline 创建），VRAM 约 880MiB（整卡）；帧率不作为验收门槛。
+12. **ComboBox 拖动问题**：KDE Wayland + 4K/150% 下，打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 正常。Avalonia/Wayland popup 限制，M1 不处理，记录在 backlog §7。
 11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
 12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
 13. **零拷贝**：只在 vkcube 线性 1-fd 上验证导入；软件窗口 2-fd/DCC 回退 XShm；未做 fence 同步/真实游戏/跨 GPU，未进默认链路。

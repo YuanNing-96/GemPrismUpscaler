@@ -12,7 +12,13 @@ public enum EffectMode
     Anime4KM = 2,
 
     /// <summary>Anime4K 2x CNN (L) + Lanczos-2 final composition.</summary>
-    Anime4KL = 3
+    Anime4KL = 3,
+
+    /// <summary>Anime4K 2x CNN (VL, experimental high-quality) + Lanczos-2.</summary>
+    Anime4KVL = 4,
+
+    /// <summary>User-provided TOML + SPIR-V pipeline.</summary>
+    Custom = 5
 }
 
 public static class EffectModeExtensions
@@ -25,6 +31,7 @@ public static class EffectModeExtensions
         EffectMode.Anime4KS => "s",
         EffectMode.Anime4KM => "m",
         EffectMode.Anime4KL => "l",
+        EffectMode.Anime4KVL => "vl",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "bilinear has no Anime4K variant")
     };
 
@@ -35,6 +42,8 @@ public static class EffectModeExtensions
         EffectMode.Anime4KS => "anime4k-s",
         EffectMode.Anime4KM => "anime4k-m",
         EffectMode.Anime4KL => "anime4k-l",
+        EffectMode.Anime4KVL => "anime4k-vl",
+        EffectMode.Custom => "custom",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
 
@@ -45,6 +54,8 @@ public static class EffectModeExtensions
         EffectMode.Anime4KS => "Anime4K S 2× + Lanczos",
         EffectMode.Anime4KM => "Anime4K M 2× + Lanczos",
         EffectMode.Anime4KL => "Anime4K L 2× + Lanczos",
+        EffectMode.Anime4KVL => "Anime4K VL 2× + Lanczos",
+        EffectMode.Custom => "自定义 effect",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
 
@@ -77,6 +88,11 @@ public static class EffectModeExtensions
             case "anime4kl":
             case "l":
                 mode = EffectMode.Anime4KL;
+                return true;
+            case "anime4k-vl":
+            case "anime4kvl":
+            case "vl":
+                mode = EffectMode.Anime4KVL;
                 return true;
             default:
                 return false;

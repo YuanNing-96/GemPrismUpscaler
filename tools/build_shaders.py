@@ -40,11 +40,14 @@ VARIANTS = {
     "s": {"file": "Anime4K_Upscale_CNN_x2_S.glsl", "display": "Anime4K S"},
     "m": {"file": "Anime4K_Upscale_CNN_x2_M.glsl", "display": "Anime4K M"},
     "l": {"file": "Anime4K_Upscale_CNN_x2_L.glsl", "display": "Anime4K L"},
+    "vl": {"file": "Anime4K_Upscale_CNN_x2_VL.glsl", "display": "Anime4K VL"},
 }
 
 # Upper bound supported by the generated push-constant block: 3 vec2 + N vec2.
-MAX_TEXTURES = 13
-PUSH_CONSTANT_BYTES = 128
+# VL needs 18 textures (168 B). The runtime queries the device limit and hides
+# VL when maxPushConstantsSize is smaller than that block.
+MAX_TEXTURES = 19
+PUSH_CONSTANT_BYTES = 256
 
 TEXTURE_REF = re.compile(
     r"\b([A-Za-z_]\w*)_(?:tex|texOff|pos|size|pt|raw)\b"

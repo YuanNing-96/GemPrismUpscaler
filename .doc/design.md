@@ -1,6 +1,6 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.2.1 · 对应 M1b（指标 / S/M/L / 脏矩形 / 零拷贝 spike）
+版本 0.2.2 · 对应 M1c（设置 / 托盘 / Profile / 自定义 effect / VL；动画未做）
 
 ---
 
@@ -45,9 +45,9 @@
 | F3 | 支持源与目标宽高比不一致（fit / fill / crop / 绝对尺寸） | M0 |
 | F4 | 检测目标进程弹出的新窗口，超分画面自动让位 | M0 |
 | F5 | 全局热键切换超分开关 | M0 |
-| F6 | 按进程名 / 窗口类名自动套用配置 | M1c |
-| F7 | effect 管线可通过配置文件组合，支持自定义 GLSL | M1c |
-| F8 | 进出超分的缩放动画 | M1c |
+| F6 | 按进程名 / 窗口类名自动套用配置 | M1c ✅ |
+| F7 | effect 管线可通过配置文件组合，支持自定义 GLSL | M1c ✅（TOML + 预编译 SPIR-V） |
+| F8 | 进出超分的缩放动画 | M1c 未做，留 v1.0 前评估 |
 | F9 | 脏矩形增量处理，静止画面不重复计算 | M1b |
 | F10 | 原生 Wayland 窗口捕获 | M2 |
 | F11 | 混合 OpenGL / Vulkan effect 管线 | M2 |
@@ -359,54 +359,73 @@ M0b 实际（v0.1.2）：
 - **算法切换**：`EffectMode.Anime4K`（默认）/ `EffectMode.Bilinear`；UI“超分算法”下拉框，CLI `--effect anime4k|bilinear`。双线性路径保持 M0a 的单次 `vkCmdBlitImage`，用于对比和故障回退。
 - **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1c）。Anime4K S 是效果/性能折中；M/L 变体在 M1b 把管线通用化后接入。
 
-M1b 实际（v0.2.1）：
+M1b 实际（v0.2.1）／M1c 增量（v0.2.2）：
 
-- **manifest 驱动 N-pass**：`tools/build_shaders.py` 不再假设 5 pass / 固定纹理名，而是从 `//!SAVE` / `//!BIND` / `//!WIDTH` 推出每个 variant 的 pass 图、纹理尺寸和 receptive-field radius，生成 `anime4k_{s,m,l}_pN.comp.spv` + `anime4k_manifest.json`。S=5/6 纹理，M=9/10，L=10/11（L 有并行分支，16 通道层拆成多张 rgba16f）。
-- **统一的 push constant**：`vec2 outSize; vec2 regionOffset; vec2 regionSize; vec2 texSize[N]`。整帧 dispatch 全部输出；脏矩形 dispatch 扩展区域；`HOOKED_pos` 仍用全尺寸归一化，保证局部/整帧一致。L 为 112 B，仍在 128 B 保证上限内，构建脚本会断言。
-- **`Anime4KChain`**：按 manifest 分配中间纹理、descriptor set、pipeline；支持多个输入/并行分支；`Record(cmd, IReadOnlyList<RectI>)` 对每个矩形按 pass 输出倍率缩放后 dispatch，所有矩形处理完再发一次输出 barrier。
-- **算法选择**：`EffectMode.Bilinear / Anime4KS / Anime4KM / Anime4KL`；`anime4k` 是 S 的 CLI 别名；默认 S。
+- **manifest 驱动 N-pass**：`tools/build_shaders.py` 不再假设 5 pass / 固定纹理名，而是从 `//!SAVE` / `//!BIND` / `//!WIDTH` 推出每个 variant 的 pass 图、纹理尺寸和 receptive-field radius，生成 `anime4k_{s,m,l,vl}_pN.comp.spv` + `anime4k_manifest.json`。S=5/6 纹理，M=9/10，L=10/11，**VL=18/19**（L 有并行分支，16 通道层拆成多张 rgba16f）。
+- **统一的 push constant**：`vec2 outSize; vec2 regionOffset; vec2 regionSize; vec2 texSize[N]`。整帧 dispatch 全部输出；脏矩形 dispatch 扩展区域；`HOOKED_pos` 仍用全尺寸归一化，保证局部/整帧一致。S/M/L 为 72/104/112 B，仍在 128 B 保证上限内；**VL 为 176 B**，运行时查询 `maxPushConstantsSize`，不足时不启用。构建脚本上限放宽到 256 B。
+- **`Anime4KChain`**：按 manifest 分配中间纹理、descriptor set、pipeline；支持多个输入/并行分支；`Record(cmd, IReadOnlyList<RectI>)` 对每个矩形按 pass 输出倍率缩放后 dispatch，所有矩形处理完再发一次输出 barrier。M1c 起它也加载自定义 effect 的外部 `.spv`。
+- **算法选择**：`EffectMode.Bilinear / Anime4KS / Anime4KM / Anime4KL / Anime4KVL / Custom`；`anime4k` 是 S 的 CLI 别名；默认 S。UI/CLI 通过 `EffectRegistry` 统一解析 id（内置 + 自定义）。
 
-未来的 effect 描述格式（M1c，尚未实现）：
+**M1c 自定义 effect（已实现）**：
 
-```toml
-name = "anime4k-2x"
-description = "Anime4K CNN 2x upscale + Lanczos-2 finish"
+- 用户 effect = `effect.toml` + 一个或多个预编译 `.spv`，放在配置目录 `effects/`（支持一层子目录）。
+- TOML 描述纹理、pass 图、`inputs`/`output`、`output_scale`、`radius`、`requires_full_frame`；运行时不依赖 glslang。
+- ABI v1 固定：descriptor binding 0..N-1 为输入 sampler，binding N 为 rgba16f storage image；push constant 固定 `outSize/regionOffset/regionSize/texSize[N]`；最终统一由 Lanczos-2 收尾。
+- 完整字段、坐标/脏矩形规则、样例与校验规则见 [.doc/effects.md](effects.md)。
 
-[[pass]]
-name = "upscale"
-shader = "anime4k_conv0..3 + d2s"
-scaling = "normal"
-scale = [2.0, 2.0]
+### 6.5 配置与 Profile（M1c，已实现）
 
-[[pass]]
-name = "finish"
-shader = "lanczos"
-scaling = "normal"
-scale = [1.5, 1.5]
-```
-
-### 6.5 配置与 Profile（M1c）
+配置：`~/.config/GemPrismUpscaler/config.toml`（`GEMPRISM_CONFIG` 可覆盖），schema=1，原子写入，损坏备份回退。
 
 ```toml
-[profile.default]
-match = ["*.exe"]
-pipeline = "anime4k-2x"
+[general]
+second_instance = "notify"   # notify | activate
+close_action = "exit"        # exit | tray
+follow_focus = true
+remember_last = true
+auto_refresh_windows = false
+refresh_interval_ms = 1000
+
+[hotkey]
+toggle_overlay = "Alt+Shift+A"
+
+[logging]
+path = ""
+level = "info"
+
+[display]
+monitor = "auto"
+
+[effect]
+default = "anime4k-s"
+scaling = "fit"
+dirty_rect = true
+
+[tray]
+enabled = true
+
+[diagnostics]
+developer_mode = false
+
+[[profile]]
+name = "galgame"
+class = ["game.exe", "Launcher.exe"]
+exe = ["*/game.exe"]
+effect = "anime4k-l"
+scaling = "fit"
+monitor = "auto"
+follow_focus = true
+dirty_rect = true
 hotkey = "Alt+Shift+A"
-
-[profile.galgame]
-match = ["game.exe", "Launcher.exe"]
-pipeline = "anime4k-2x-soft"
-allow_windowed = true
 ```
 
-### 6.6 动画（M1c）
+- 优先级：CLI 显式参数 > Profile 匹配 > `[last]`（`remember_last`）> 设置默认 > 内置默认。
+- Profile 匹配 WM_CLASS、`/proc/<pid>/exe`、Wine cmdline 中的 `.exe`；通配符 `*`/`?`；文件顺序先匹配先赢。
+- 选中窗口时自动套用；成功启动后写 `[last]`。
 
-覆盖窗口本身保持全屏不动，只对 GPU 侧的输出矩形做插值：
+### 6.6 动画（M1c 未做）
 
-- 进入：quad 从游戏窗口屏幕矩形 → 全屏矩形，`ease-out cubic`，约 220 ms
-- 退出：反向，动画结束后销毁覆盖窗口
-- 动画期间切换到轻量重采样，结束后恢复高质量
-- 每帧跟踪游戏窗口位置，避免动画期间窗口移动导致错位
+M1c 按用户决定**不做动画**，留到 v1.0 前评估。设计意图仍是：覆盖窗口本身保持全屏不动，只对 GPU 输出矩形做插值；动画期间轻量重采样，结束后恢复高质量；弹窗/失焦优先即时隐藏。实现前需要先解决“动画中源窗口被关闭/最小化”的竞态。
 
 ---
 

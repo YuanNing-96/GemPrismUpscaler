@@ -1,0 +1,37 @@
+#version 450
+// Example custom effect for GemPrismUpscaler's compute pass ABI.
+// 2x bilinear upscale + unsharp mask. See .doc/effects.md.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D MAIN_sampler;
+layout(rgba16f, binding = 1) uniform image2D outImage;
+
+layout(push_constant) uniform PC {
+    vec2 outSize;
+    vec2 regionOffset;
+    vec2 regionSize;
+    vec2 texSize[2];   // 2 = total textures in this effect: MAIN + upscaled2x
+} pc;
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 regionSize = ivec2(pc.regionSize);
+    if (local.x >= regionSize.x || local.y >= regionSize.y) return;
+
+    ivec2 p = ivec2(pc.regionOffset) + local;
+    vec2 srcSize = pc.texSize[0];
+    vec2 uv = (vec2(p) + vec2(0.5)) / (2.0 * srcSize);
+    vec2 px = 1.0 / srcSize;
+
+    vec4 c = texture(MAIN_sampler, uv);
+    vec4 blur = (
+        texture(MAIN_sampler, uv + vec2(px.x, 0.0)) +
+        texture(MAIN_sampler, uv - vec2(px.x, 0.0)) +
+        texture(MAIN_sampler, uv + vec2(0.0, px.y)) +
+        texture(MAIN_sampler, uv - vec2(0.0, px.y))
+    ) * 0.25;
+
+    vec3 sharp = c.rgb + (c.rgb - blur.rgb) * 0.7;
+    imageStore(outImage, p, vec4(clamp(sharp, 0.0, 1.0), c.a));
+}

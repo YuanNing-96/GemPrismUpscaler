@@ -1,5 +1,42 @@
 # 更新记录
 
+## v0.2.2（2026-11-05）· M1c：设置、托盘、Profile、自定义 effect 与 VL
+
+M1c 把 M1a/M1b 的能力收拢成可日常使用的配置界面，并补齐 Anime4K VL。按约定，M1c 不做动画、不做完整回归，边界兼容性留到 v1.0 统一验收。
+
+### 新增
+
+- **配置/设置**：`~/.config/GemPrismUpscaler/config.toml`，`GEMPRISM_CONFIG` 可覆盖；TOML 原子写入、损坏备份回退、schema=1。设置页覆盖热键、日志路径、第二实例行为、默认显示器/效果/缩放、跟随焦点、窗口列表自动刷新、托盘开关/关闭行为、开发模式。
+- **主窗口 Tab**：左侧 5 个 Tab：会话 / 设置 / Profile / 效果 / 日志。
+- **托盘**：Avalonia `TrayIcon`（StatusNotifierItem/AppIndicator）；显示设置、开始/停止、显示隐藏覆盖层、退出。默认启用、关闭默认退出；不可用时自动禁用并强制直接退出。KDE Wayland 下“显示设置窗口”增加 KWin 脚本兜底激活。
+- **Profile**：`[[profile]]` 支持 WM_CLASS、`/proc/<pid>/exe`、Wine cmdline `.exe` 通配匹配；按文件顺序先匹配先赢；可覆盖 effect/缩放/显示器/跟随焦点/脏矩形/热键。`remember_last` 记住上次成功使用的效果/缩放/显示器。
+- **自定义 effect**：TOML 描述 compute pass 图 + 外部预编译 SPIR-V；运行时不需要 glslang。ABI v1、纹理上限 19、单 pass 输入 16、push constant 256B；详见 `.doc/effects.md`，样例 `examples/effects/sharpen-2x/`。
+- **Anime4K VL**：新增 `anime4k-vl`（18 pass / 19 纹理 / 176B push constant），默认不启用；设备 `maxPushConstantsSize` 不足时不启用。验收只要求画面正确，帧率不作为门槛。
+- **错误/诊断**：分级日志、`ErrorBus`、功能级/非功能级错误区分；开发模式输出详细日志与界面提示；Vulkan 校验层按 Debug/Release/开发模式/`GEMPRISM_VALIDATION=1` 门控。
+- **窗口列表自动刷新**：可配置间隔 250–5000ms；默认关闭。
+- **热键可配置**：支持 Ctrl/Alt/Shift/Super + 主键，处理 NumLock/CapsLock 组合；冲突时提示并回退。
+- **第二实例**：默认 `notify`（只提示，不影响已有实例）；可配置 `activate`，通过 Unix socket 让已有 GUI 到前台；第二个 CLI 仍报错。
+
+### 修复
+
+- **日志 Tab 字体崩溃**：`AppendLog` 在日志页未显示时不再设置 `CaretIndex`，避免 `Could not create glyphTypeface` 导致 SIGABRT；增加 UI 线程未处理异常兜底。
+- **X11 清理/焦点竞态**：focus 前检查源窗口仍 viewable；`X11Overlay` 幂等销毁；X error 进入诊断日志。
+- **Vulkan 校验层**：Release 默认关闭，Debug/开发模式/环境变量开启；避免日常运行的性能与日志开销。
+
+### 验证
+
+- `dotnet build -c Release`：0 warning / 0 error（NuGet 审计缓存只读的环境警告除外）；`dotnet test -c Release`：88/88。
+- 自定义 effect `sharpen-2x` 在 1280×720 测试图案 + 4K 输出上成功启动并呈现，无 Vulkan 校验错误。
+- Anime4K VL 在 1280×720 测试图案 + 4K 输出上成功启动并呈现，无 Vulkan 校验错误；首帧 effect CPU 约 466ms（含 18 个 pipeline 创建），VRAM 约 880 MiB（整卡）。
+- 托盘在 KDE Wayland 下创建成功；SNI `Activate` 经 KWin 兜底把窗口带到前台。
+- 按约定未做 M1b 完整回归；静态/脏矩形/4K 等边界验收留 v1.0。
+
+### 注意事项
+
+- KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动（DP 100% 正常）；Avalonia/Wayland popup 限制，M1 不处理，记录在 `.doc/backlog.md` §7。
+- 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass。
+- M1c 不做动画；VL 帧率不作为验收门槛；完整回归/边界兼容性留 v1.0。
+
 ## v0.2.1（2026-11-05）· M1b：指标、Anime4K S/M/L、脏矩形与零拷贝 spike
 
 M1b 把 effect 管线从 5-pass 硬编码改成 manifest 驱动的 N-pass，加入 S/M/L、分块脏矩形、持久合成图和每秒指标；默认仍是 S + Lanczos-2，双线性回退保留。

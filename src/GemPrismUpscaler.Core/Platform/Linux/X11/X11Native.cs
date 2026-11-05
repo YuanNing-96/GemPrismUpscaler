@@ -33,9 +33,13 @@ internal static unsafe class X11Native
     public const long CWEventMask = 1L << 11;
 
     public const uint ShiftMask = 1u << 0;
+    public const uint LockMask = 1u << 1;
     public const uint ControlMask = 1u << 2;
     public const uint Mod1Mask = 1u << 3;
+    public const uint Mod2Mask = 1u << 4;
     public const uint Mod4Mask = 1u << 6;
+    public const uint ModifierMask = ShiftMask | ControlMask | Mod1Mask | Mod4Mask;
+    public const uint IgnoreLockMasks = LockMask | Mod2Mask;
 
     public const int GrabModeAsync = 1;
     public const int InputHint = 1;
@@ -263,6 +267,7 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern IntPtr XDefaultVisual(IntPtr display, int screen);
     [DllImport(X11)] public static extern int XDefaultDepth(IntPtr display, int screen);
     [DllImport(X11)] public static extern ulong XInternAtom(IntPtr display, [MarshalAs(UnmanagedType.LPStr)] string name, int onlyIfExists);
+    [DllImport(X11)] public static extern ulong XGetSelectionOwner(IntPtr display, ulong selection);
     [DllImport(X11)] public static extern int XGetWindowProperty(IntPtr display, ulong window, ulong property, long offset, long length,
         int delete, ulong reqType, out ulong actualType, out int actualFormat, out ulong nitems, out ulong bytesAfter, out IntPtr prop);
     [DllImport(X11)] public static extern int XFree(IntPtr data);
@@ -298,6 +303,7 @@ internal static unsafe class X11Native
         int pointerMode, int keyboardMode);
     [DllImport(X11)] public static extern int XUngrabKey(IntPtr display, int keycode, uint modifiers, ulong grabWindow);
     [DllImport(X11)] public static extern int XKeysymToKeycode(IntPtr display, ulong keysym);
+    [DllImport(X11)] public static extern ulong XStringToKeysym([MarshalAs(UnmanagedType.LPStr)] string name);
     [DllImport(X11)] public static extern int XQueryPointer(IntPtr display, ulong window, out ulong root, out ulong child,
         out int rootX, out int rootY, out int winX, out int winY, out uint mask);
     [DllImport(X11)] public static extern int XGetInputFocus(IntPtr display, out ulong focus, out int revertTo);

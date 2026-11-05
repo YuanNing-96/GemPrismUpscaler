@@ -2,41 +2,188 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="GemPrismUpscaler.Views.MainWindow"
         Title="宝石棱镜 GemPrismUpscaler"
-        Width="860" Height="620"
-        MinWidth="640" MinHeight="480">
-    <Grid Margin="14" RowDefinitions="Auto,Auto,*,Auto,Auto">
+        Width="1040" Height="800"
+        MinWidth="880" MinHeight="660">
+    <Grid Margin="14" RowDefinitions="Auto,Auto,*">
         <TextBlock Grid.Row="0" Text="宝石棱镜 · GemPrismUpscaler" FontSize="20" FontWeight="SemiBold"/>
-        <StackPanel Grid.Row="1" Spacing="6" Margin="0,10,0,6">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="RefreshButton" Content="刷新窗口"/>
-                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="#666" Text="就绪"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <CheckBox x:Name="StretchCheck" Content="拉伸填满（默认保持比例）" VerticalAlignment="Center"/>
-                <CheckBox x:Name="FollowFocusCheck" Content="跟随焦点（切到其他程序时收起）" IsChecked="True" VerticalAlignment="Center"/>
-                <TextBlock Text="超分算法" VerticalAlignment="Center" Foreground="#666" Margin="8,0,0,0"/>
-                <ComboBox x:Name="EffectCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="230">
-                    <ComboBoxItem Content="Anime4K S 2× + Lanczos（默认）"/>
-                    <ComboBoxItem Content="Anime4K M 2× + Lanczos（质量档）"/>
-                    <ComboBoxItem Content="Anime4K L 2× + Lanczos（4K 可能不足 60fps）"/>
-                    <ComboBoxItem Content="双线性（M0a）"/>
-                </ComboBox>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="输出显示器" VerticalAlignment="Center" Foreground="#666"/>
-                <ComboBox x:Name="MonitorCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="300"/>
-                <TextBlock Text="自动=跟随游戏窗口；手动选择则固定输出到该屏"
-                           VerticalAlignment="Center" Foreground="#666" FontSize="11"/>
-            </StackPanel>
-        </StackPanel>
-        <ListBox Grid.Row="2" x:Name="WindowList" Margin="0,4"/>
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="0,8">
-            <Button x:Name="StartButton" Content="开始超分"/>
-            <Button x:Name="StopButton" Content="停止" IsEnabled="False"/>
-            <Button x:Name="ExitButton" Content="退出"/>
-            <TextBlock Text="热键：Alt+Shift+A 显示/隐藏覆盖层" VerticalAlignment="Center" Foreground="#666" Margin="12,0,0,0"/>
-        </StackPanel>
-        <TextBox Grid.Row="4" x:Name="LogText" Height="150" IsReadOnly="True" AcceptsReturn="True"
-                 TextWrapping="NoWrap" Margin="0,6,0,0" FontSize="11"/>
+
+        <Border Grid.Row="1" x:Name="ErrorBanner" IsVisible="False"
+                Background="#FDECEA" BorderBrush="#E57373" BorderThickness="1"
+                CornerRadius="4" Padding="10,8" Margin="0,8,0,0">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" x:Name="ErrorText" Foreground="#8B1E1E"
+                           TextWrapping="Wrap" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" x:Name="ErrorLogButton" Content="查看日志" Margin="10,0,6,0"/>
+                <Button Grid.Column="2" x:Name="ErrorCloseButton" Content="关闭"/>
+            </Grid>
+        </Border>
+
+        <TabControl Grid.Row="2" x:Name="MainTabs" TabStripPlacement="Left" Margin="0,10,0,0">
+            <TabItem Header="会话">
+                <Grid Margin="10" RowDefinitions="Auto,*,Auto,Auto">
+                    <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="RefreshButton" Content="刷新窗口"/>
+                            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="#666" Text="就绪"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <CheckBox x:Name="StretchCheck" Content="拉伸填满（默认保持比例）" VerticalAlignment="Center"/>
+                            <CheckBox x:Name="FollowFocusCheck" Content="跟随焦点（切到其他程序时收起）" IsChecked="True" VerticalAlignment="Center"/>
+                            <TextBlock Text="超分算法" VerticalAlignment="Center" Foreground="#666" Margin="8,0,0,0"/>
+                            <ComboBox x:Name="EffectCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="250"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="输出显示器" VerticalAlignment="Center" Foreground="#666"/>
+                            <ComboBox x:Name="MonitorCombo" SelectedIndex="0" VerticalAlignment="Center" MinWidth="300"/>
+                            <TextBlock Text="自动=跟随游戏窗口；手动选择则固定输出到该屏"
+                                       VerticalAlignment="Center" Foreground="#666" FontSize="11"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <ListBox Grid.Row="1" x:Name="WindowList" Margin="0,4"/>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8" VerticalAlignment="Bottom">
+                        <Button x:Name="StartButton" Content="开始超分"/>
+                        <Button x:Name="StopButton" Content="停止" IsEnabled="False"/>
+                        <Button x:Name="ExitButton" Content="退出"/>
+                        <TextBlock x:Name="HotkeyHint" Text="热键：Alt+Shift+A 显示/隐藏覆盖层"
+                                   VerticalAlignment="Center" Foreground="#666" Margin="12,0,0,0"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="3" Text="左侧“日志”标签页可查看运行日志；设置、Profile、效果在对应标签页。"
+                               Foreground="#888" FontSize="11"/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="设置">
+                <ScrollViewer>
+                    <StackPanel Margin="10" Spacing="12">
+                        <TextBlock Text="常规" FontSize="15" FontWeight="SemiBold"/>
+                        <Grid ColumnDefinitions="200,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                              RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="显示/隐藏热键" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="HotkeyBox" Watermark="Alt+Shift+A"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="第二实例行为" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="SecondInstanceCombo" MinWidth="260">
+                                <ComboBoxItem Content="仅提示（默认，不影响已有实例）"/>
+                                <ComboBoxItem Content="激活已有窗口"/>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="关闭窗口行为" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="CloseActionCombo" MinWidth="260">
+                                <ComboBoxItem Content="直接退出（默认）"/>
+                                <ComboBoxItem Content="最小化到托盘"/>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="跟随焦点" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="3" Grid.Column="1" x:Name="FollowFocusSettingCheck"
+                                      Content="游戏失去焦点时收起覆盖层"/>
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="记住上次选择" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="4" Grid.Column="1" x:Name="RememberLastCheck"
+                                      Content="下次启动恢复上次成功使用的效果/缩放/显示器"/>
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="窗口列表自动刷新" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                <CheckBox x:Name="AutoRefreshCheck" Content="启用" VerticalAlignment="Center"/>
+                                <TextBlock Text="间隔(ms)" VerticalAlignment="Center" Foreground="#666"/>
+                                <TextBox x:Name="RefreshIntervalBox" Width="90"/>
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="托盘" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                                <CheckBox x:Name="TrayEnabledCheck" Content="启用托盘" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TrayStatusText" VerticalAlignment="Center" Foreground="#666"/>
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="7" Grid.Column="0" Text="输入模式" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="2D / 视觉小说（当前）" VerticalAlignment="Center"/>
+                                <CheckBox Content="FPS / raw input（M2）" IsEnabled="False" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="显示与效果" FontSize="15" FontWeight="SemiBold" Margin="0,6,0,0"/>
+                        <Grid ColumnDefinitions="200,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="默认输出显示器" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="DefaultMonitorCombo" MinWidth="300"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="默认超分算法" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="DefaultEffectCombo" MinWidth="300"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="默认缩放" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="DefaultScalingCombo" MinWidth="260">
+                                <ComboBoxItem Content="保持比例（fit）"/>
+                                <ComboBoxItem Content="拉伸填满（stretch）"/>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="脏矩形" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="3" Grid.Column="1" x:Name="DirtyRectCheck"
+                                      Content="只重算变化区域（推荐）"/>
+                        </Grid>
+
+                        <TextBlock Text="日志与诊断" FontSize="15" FontWeight="SemiBold" Margin="0,6,0,0"/>
+                        <Grid ColumnDefinitions="200,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="日志路径" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="LogPathBox" Width="480" Watermark="留空使用默认路径"/>
+                                <Button x:Name="OpenLogButton" Content="打开日志"/>
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="开发模式" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="1" Grid.Column="1" x:Name="DeveloperModeCheck"
+                                      Content="详细日志 + 非功能错误提示（Vulkan 校验层下次启动生效）"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Vulkan 校验层" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="ValidationStatusText"
+                                       Foreground="#666" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+                            <Button x:Name="SaveSettingsButton" Content="保存设置"/>
+                            <Button x:Name="ResetSettingsButton" Content="恢复默认"/>
+                            <Button x:Name="OpenConfigDirButton" Content="打开配置目录"/>
+                            <TextBlock x:Name="SettingsStatusText" Foreground="#666" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Profile">
+                <Grid Margin="10" RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0" TextWrapping="Wrap" Foreground="#666"
+                               Text="Profile 来自 config.toml 的 [[profile]]，按文件顺序先匹配先赢。匹配 WM_CLASS、/proc/&lt;pid&gt;/exe 和 Wine cmdline 里的 .exe。"/>
+                    <ListBox Grid.Row="1" x:Name="ProfileList" Margin="0,8"/>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                        <Button x:Name="ReloadProfilesButton" Content="重新加载"/>
+                        <Button x:Name="OpenProfileConfigButton" Content="打开 config.toml"/>
+                        <TextBlock x:Name="ProfileStatusText" Foreground="#666" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="效果">
+                <Grid Margin="10" RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0" TextWrapping="Wrap" Foreground="#666"
+                               Text="内置 Anime4K S/M/L/VL 与双线性。自定义 effect 放在配置目录的 effects/ 下，每个 effect 一个 TOML + 预编译 SPIR-V；详见 .doc/effects.md。"/>
+                    <ListBox Grid.Row="1" x:Name="EffectList" Margin="0,8"/>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                        <Button x:Name="ReloadEffectsButton" Content="重新加载"/>
+                        <Button x:Name="OpenEffectsDirButton" Content="打开效果目录"/>
+                        <TextBlock x:Name="EffectStatusText" Foreground="#666" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="日志" x:Name="LogTab">
+                <Grid Margin="10" RowDefinitions="*,Auto">
+                    <TextBox Grid.Row="0" x:Name="LogText" IsReadOnly="True" AcceptsReturn="True"
+                             TextWrapping="NoWrap" FontSize="12"/>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                        <Button x:Name="LogTabOpenButton" Content="打开日志文件"/>
+                        <Button x:Name="LogTabClearButton" Content="清空显示"/>
+                        <TextBlock x:Name="LogTabStatusText" Foreground="#666" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
     </Grid>
 </Window>

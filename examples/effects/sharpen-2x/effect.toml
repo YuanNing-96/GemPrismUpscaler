@@ -1,0 +1,17 @@
+# Example GemPrismUpscaler custom effect.
+# Copy this whole directory to:
+#   ~/.config/GemPrismUpscaler/effects/sharpen-2x/
+# then restart the app or press "重新加载" on the 效果 tab.
+
+abi = 1
+id = "sharpen-2x"
+name = "锐化 2×（示例）"
+radius = 2
+requires_full_frame = false
+
+[[pass]]
+name = "sharpen"
+shader = "sharpen.comp.spv"
+inputs = ["MAIN"]
+output = "upscaled2x"
+output_scale = 2
