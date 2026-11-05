@@ -74,7 +74,8 @@
 9. **设置界面**：M1c 已实现；设置持久化在 `~/.config/GemPrismUpscaler/config.toml`，`GEMPRISM_CONFIG` 可覆盖。
 10. **自定义 shader**：M1c 支持 TOML + 预编译 SPIR-V 的 compute pass 链；不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 256B（设备可能更低）。
 11. **VL**：实验最高画质档，18 pass/19 纹理；720p 源/4K 输出下首帧 effect CPU 约 466ms（含 pipeline 创建），VRAM 约 880MiB（整卡）；帧率不作为验收门槛。
-12. **ComboBox 拖动问题**：KDE Wayland + 4K/150% 下，打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 正常。Avalonia/Wayland popup 限制，M1 不处理，记录在 backlog §7。
+12. **GPU 窗口捕获撕裂**：X11/XWayland 下 `XShmGetImage`/`XGetImage`/XComposite 读取 GPU 更新的窗口时可能拿到半帧，overlay 会旧帧回退/撕裂；源窗口本身可能正常。M1c 未解决，M2 用 DMA-BUF/零拷贝/PipeWire 合成捕获处理。临时规避：源程序开 VSync。
+13. **ComboBox 拖动问题**：KDE Wayland + 4K/150% 下，打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 正常。Avalonia/Wayland popup 限制，M1 不处理，记录在 backlog §7。
 11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
 12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
 13. **零拷贝**：只在 vkcube 线性 1-fd 上验证导入；软件窗口 2-fd/DCC 回退 XShm；未做 fence 同步/真实游戏/跨 GPU，未进默认链路。
