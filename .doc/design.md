@@ -1,6 +1,6 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.2.2 · 对应 M1c（设置 / 托盘 / Profile / 自定义 effect / VL；动画未做）
+版本 0.3.0 · 对应 M1c（设置 / 托盘 / Profile / 自定义 effect / VL；动画未做）
 
 ---
 
@@ -359,7 +359,7 @@ M0b 实际（v0.1.2）：
 - **算法切换**：`EffectMode.Anime4K`（默认）/ `EffectMode.Bilinear`；UI“超分算法”下拉框，CLI `--effect anime4k|bilinear`。双线性路径保持 M0a 的单次 `vkCmdBlitImage`，用于对比和故障回退。
 - **未包含**：FSR1 EASU/RCAS、`Clamp_Highlights`、混合 GL+Vulkan、TOML effect 描述（M1c）。Anime4K S 是效果/性能折中；M/L 变体在 M1b 把管线通用化后接入。
 
-M1b 实际（v0.2.1）／M1c 增量（v0.2.2）：
+M1b 实际（v0.2.1）／M1c 增量（v0.3.0）：
 
 - **manifest 驱动 N-pass**：`tools/build_shaders.py` 不再假设 5 pass / 固定纹理名，而是从 `//!SAVE` / `//!BIND` / `//!WIDTH` 推出每个 variant 的 pass 图、纹理尺寸和 receptive-field radius，生成 `anime4k_{s,m,l,vl}_pN.comp.spv` + `anime4k_manifest.json`。S=5/6 纹理，M=9/10，L=10/11，**VL=18/19**（L 有并行分支，16 通道层拆成多张 rgba16f）。
 - **统一的 push constant**：`vec2 outSize; vec2 regionOffset; vec2 regionSize; vec2 texSize[N]`。整帧 dispatch 全部输出；脏矩形 dispatch 扩展区域；`HOOKED_pos` 仍用全尺寸归一化，保证局部/整帧一致。S/M/L 为 72/104/112 B，仍在 128 B 保证上限内；**VL 为 176 B**，运行时查询 `maxPushConstantsSize`，不足时不启用。构建脚本上限放宽到 256 B。

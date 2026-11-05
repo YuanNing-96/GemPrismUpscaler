@@ -2,7 +2,7 @@
 
 本文是 GemPrismUpscaler 自定义 effect 的**完整约定**。目标：其他人或 agent 只读这一篇，就能写出可被程序加载、运行、通过校验的 effect，不需要改 C# 代码，也不需要重新编译应用。
 
-- 适用版本：v0.2.2（M1c）
+- 适用版本：v0.3.0（M1c）
 - ABI 版本：**1**
 - 运行时不需要 `glslangValidator`；`.spv` 是预编译产物
 - 自定义 effect 只支持 **Vulkan compute pass**；最终统一由内置 Lanczos-2 收尾
@@ -292,4 +292,4 @@ cp -r examples/effects/sharpen-2x ~/.config/GemPrismUpscaler/effects/
 
 | ABI | 版本 | 说明 |
 |---|---|---|
-| 1 | v0.2.2 | 首个公开约定：compute pass、固定 push constant、19 纹理、Lanczos-2 收尾 |
+| 1 | v0.3.0 | 首个公开约定：compute pass、固定 push constant、19 纹理、Lanczos-2 收尾 |

@@ -76,7 +76,7 @@ M1c 已实现完整的设置/配置界面；下表保留为需求对照。
 
 ## 7. M1 阶段记录、留待后续处理
 
-- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决，M2 处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、`GEMPRISM_PRESENT_WAIT=1`、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证，正式修复需要 M2 的 DMA-BUF/零拷贝或 PipeWire/portal 合成捕获。临时规避：源程序开启 VSync/垂直同步。
+- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决，M2 处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、present wait 实验、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证，正式修复需要 M2 的 DMA-BUF/零拷贝或 PipeWire/portal 合成捕获。临时规避：源程序开启 VSync/垂直同步。
 
 - **KDE Wayland + 4K/150% 缩放下 ComboBox 下拉列表不跟随窗口移动**：在 HDMI 4K（150%）上打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 屏正常。判断为 Avalonia 12.1.4 在 Wayland 下 popup 定位/缩放的限制，不是本项目的布局问题。M1 不处理；已尝试“窗口移动时自动收起”，但在 Wayland 下收不到可靠的窗口位置变化，效果不成立，已回退。留到 M2 或 Avalonia 升级后复测。
 - **热键改为“实际按一遍”录入**：M1c 设置页目前是文本框输入字符串；后续改成捕获用户真实按键/修饰键，实时显示并校验，避免手写格式错误。M1 暂不修改。

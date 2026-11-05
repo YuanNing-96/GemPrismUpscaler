@@ -70,7 +70,7 @@ X11/XWayland 游戏窗口
 3. S/M/L 可切换；默认 S；4K 实测已记录：真实游戏 L 59.5–60.7 fps、gpuEffect 1.1–2.0 ms；S/M/L 全帧 gpuEffect 0.36/0.79/1.11 ms（testpattern）；详见 `.agent/M1b验收记录.md`。
 4. 零拷贝 spike 有明确 go/no-go 结论，不把未验证路径放进默认链路：结论为**有条件 go**，详见 [zero-copy-spike.md](zero-copy-spike.md)。
 
-### M1c · 设置、托盘、Profile 与 effect 扩展（v0.2.2，已完成主要功能；动画留后续）
+### M1c · 设置、托盘、Profile 与 effect 扩展（v0.3.0，已完成主要功能；动画留后续）
 
 | 模块 | 状态 | 内容 |
 |---|---|---|
@@ -149,7 +149,7 @@ M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依�
 | 0.1.2 | M0b（Anime4K S 2× CNN + Lanczos-2） |
 | 0.2.0 | M1a（单实例/退出审计/多显示器基础） |
 | 0.2.1 | M1b（指标/S/M/L/脏矩形/上传优化/零拷贝 spike） |
-| 0.2.2 | M1c（设置/托盘/Profile/自定义 effect/VL/开发模式；动画留后续） |
+| 0.3.0 | M1c（设置/托盘/Profile/自定义 effect/VL/开发模式；动画留后续） |
 | 0.2.x | M1c |
 | 0.3.x | M2 |
 | 1.0.0 | M3 完成，接口稳定 |

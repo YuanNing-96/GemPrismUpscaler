@@ -46,10 +46,6 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private VkSemaphore _imageAvailable;
     private VkSemaphore[] _renderSemaphores = Array.Empty<VkSemaphore>();
     private Fence _inFlight;
-    private readonly bool _waitPresent = string.Equals(
-        Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_WAIT"), "1",
-        StringComparison.OrdinalIgnoreCase);
-    private bool _waitPresentLogged;
     private CommandPool _commandPool;
     private CommandBuffer _commandBuffer;
     private Image _sourceImage;
@@ -251,29 +247,6 @@ public sealed unsafe class VulkanBlitter : IDisposable
         catch { }
     }
 
-    private static PresentModeKHR ChoosePresentMode(PresentModeKHR* modes, uint count)
-    {
-        bool Has(PresentModeKHR mode)
-        {
-            for (int i = 0; i < count; i++)
-                if (modes[i] == mode) return true;
-            return false;
-        }
-
-        string? requested = Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_MODE")
-            ?.Trim().ToLowerInvariant();
-        if (requested == "mailbox" && Has(PresentModeKHR.MailboxKhr))
-            return PresentModeKHR.MailboxKhr;
-        if (requested == "immediate" && Has(PresentModeKHR.ImmediateKhr))
-            return PresentModeKHR.ImmediateKhr;
-
-        // FIFO is the safe default for an X11/XWayland overlay: mailbox can
-        // present frames out of order/let the compositor show a stale pixmap,
-        // which looks like an old frame flashing back. Mailbox remains available
-        // via GEMPRISM_PRESENT_MODE=mailbox for experiments.
-        return PresentModeKHR.FifoKhr;
-    }
-
     private void CreateDevice()
     {
         uint qcount = 0;
@@ -345,15 +318,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
         }
         _swapchainFormat = chosen.Format;
 
-        uint presentCount = 0;
-        _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &presentCount, null);
-        var presentModes = stackalloc PresentModeKHR[(int)presentCount];
-        _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &presentCount, presentModes);
-        PresentModeKHR presentMode = ChoosePresentMode(presentModes, presentCount);
-        Log.Info($"swapchain present mode={presentMode}" +
-                 (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_MODE"))
-                     ? " (default)"
-                     : " (GEMPRISM_PRESENT_MODE)"));
+        PresentModeKHR presentMode = PresentModeKHR.FifoKhr;
+        Log.Info("swapchain present mode=PresentModeFifoKhr");
 
         Extent2D extent = caps.CurrentExtent;
         if (extent.Width == uint.MaxValue)
@@ -754,15 +720,6 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Result pr = _swapchainExt.QueuePresent(_queue, &present);
         if (pr != Result.Success && pr != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkQueuePresentKHR failed: {pr}");
-        if (_waitPresent)
-        {
-            if (!_waitPresentLogged)
-            {
-                _waitPresentLogged = true;
-                Log.Info("present wait enabled (GEMPRISM_PRESENT_WAIT=1)");
-            }
-            _vk.QueueWaitIdle(_queue);
-        }
         LastPresentCpuMs = presentClock.Elapsed.TotalMilliseconds;
         LastTotalCpuMs = totalClock.Elapsed.TotalMilliseconds;
     }

@@ -4,7 +4,7 @@
 
 宝石棱镜把低分辨率的游戏窗口实时超分到全屏显示。它支持任意分辨率与任意宽高比的组合，目标是通过可配置的 effect 管线组合 Anime4K、FSR 等算法。它不修改游戏、不注入 DLL、不依赖 gamescope，因此对 32/64 位、D3D9/11/12/OpenGL/Vulkan 游戏一视同仁。
 
-当前版本是 **v0.2.2（M1c）**：在 M1b 的 Anime4K S/M/L、脏矩形和指标之上，加入 **设置/配置持久化**、**托盘**、**Profile 自动匹配**、**自定义 effect（TOML + 预编译 SPIR-V）**、**Anime4K VL** 和**开发模式诊断**。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。M1c 不做动画、不做完整回归（留到 v1.0 统一验收）。
+当前版本是 **v0.3.0（M1c）**：在 M1b 的 Anime4K S/M/L、脏矩形和指标之上，加入 **设置/配置持久化**、**托盘**、**Profile 自动匹配**、**自定义 effect（TOML + 预编译 SPIR-V）**、**Anime4K VL** 和**开发模式诊断**。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。M1c 不做动画、不做完整回归（留到 v1.0 统一验收）。
 
 ## 支持范围
 
@@ -122,12 +122,12 @@ dotnet run --project src/GemPrismUpscaler -c Release
 
 `--effect anime4k` 仍作为 S 的别名，兼容 M0b/M1a 命令；`--effect` 也接受自定义 effect 的 `id`。默认保持源宽高比（fit，4:3 源会有黑边）；`--stretch` 拉伸填满。`--monitor` 省略时自动选择窗口所在显示器；窗口跨屏移动时 overlay 会跟随重建。`--output-size` 是调试/基准用的输出尺寸覆写（可大于屏幕），正常使用不要加。
 
-配置：默认 `~/.config/GemPrismUpscaler/config.toml`；`GEMPRISM_CONFIG` 可覆盖。日志：`GEMPRISM_LOG` 可覆盖配置里的日志路径；`GEMPRISM_STATS=/path/stats.csv` 会另外写每秒一行指标 CSV；`GEMPRISM_VALIDATION=1` 可在 Release 下强制打开 Vulkan 校验层；`GEMPRISM_DEV=1` 强制开发模式；`GEMPRISM_PRESENT_MODE=mailbox|immediate` 可覆盖默认的 FIFO 呈现模式；`GEMPRISM_PRESENT_WAIT=1` 让每帧等待 present 完成；`GEMPRISM_CAPTURE=xgetimage` 可强制走 XGetImage 回退；`GEMPRISM_CAPTURE=composite` 走 XComposite 窗口 pixmap。
+配置：默认 `~/.config/GemPrismUpscaler/config.toml`；`GEMPRISM_CONFIG` 可覆盖。日志：`GEMPRISM_LOG` 可覆盖配置里的日志路径；`GEMPRISM_STATS=/path/stats.csv` 会另外写每秒一行指标 CSV；`GEMPRISM_VALIDATION=1` 可在 Release 下强制打开 Vulkan 校验层；`GEMPRISM_DEV=1` 强制开发模式。
 
 日志第一行应包含：
 
 ```text
-engine started version=0.2.2 effect=anime4k-s ... monitor=HDMI-A-1 ...
+engine started version=0.3.0 effect=anime4k-s ... monitor=HDMI-A-1 ...
 ```
 
 每秒的 `stats` 行示例：

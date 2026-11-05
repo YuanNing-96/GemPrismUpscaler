@@ -1,6 +1,6 @@
 # 更新记录
 
-## v0.2.2（2026-11-05）· M1c：设置、托盘、Profile、自定义 effect 与 VL
+## v0.3.0（2026-11-06）· M1c：设置、托盘、Profile、自定义 effect 与 VL
 
 M1c 把 M1a/M1b 的能力收拢成可日常使用的配置界面，并补齐 Anime4K VL。按约定，M1c 不做动画、不做完整回归，边界兼容性留到 v1.0 统一验收。
 
@@ -24,7 +24,7 @@ M1c 把 M1a/M1b 的能力收拢成可日常使用的配置界面，并补齐 Ani
 - **Vulkan 校验层**：Release 默认关闭，Debug/开发模式/环境变量开启；避免日常运行的性能与日志开销。
 - **配置恢复**：TOML 语法错误、无效值、未知键都视为坏配置；原文件改名为 `config.toml.bad-*`，写回修正后的配置（值坏改该值，语法错误整体回默认），避免每次启动重复生成 `.bad`。
 - **Profile 重新加载**：Profile Tab 的“重新加载”现在会重新读取 `config.toml`，而不是只刷新内存中的列表。
-- **呈现顺序**：X11/XWayland overlay 默认改用 `VK_PRESENT_MODE_FIFO_KHR`；`GEMPRISM_PRESENT_MODE=mailbox|immediate` 可覆盖，`GEMPRISM_PRESENT_WAIT=1`/`GEMPRISM_CAPTURE=xgetimage` 用于诊断。FIFO 本身未能消除旧帧闪回，根因更接近焦点隐藏后重新显示旧 swapchain 内容。
+- **呈现顺序**：X11/XWayland overlay 固定使用 `VK_PRESENT_MODE_FIFO_KHR`。FIFO 本身未能消除旧帧闪回/撕裂，根因已定位为 GPU 窗口捕获的半帧问题（M1c 已知限制，M2 处理）。
 - **焦点/显示**：焦点丢失增加 300ms 去抖，避免瞬时焦点抖动导致 overlay 反复隐藏/显示；`X11Overlay.Show()` 先把窗口背景清黑再映射，避免重新显示时露出上一帧。焦点丢失日志会记录当前 X11 focus 窗口 id。
 - **测试工具**：`tools/testpattern` 设置 `WM_CLASS=testpattern`，便于用 `class = ["testpattern"]` 验证 Profile。
 

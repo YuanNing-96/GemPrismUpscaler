@@ -84,35 +84,9 @@ public sealed class X11Capture : IDisposable
     }
 
     private bool _shmFailureLogged;
-    private static readonly string CaptureMode =
-        Environment.GetEnvironmentVariable("GEMPRISM_CAPTURE")?.Trim().ToLowerInvariant() ?? string.Empty;
-    private static readonly bool ForceGetImage = CaptureMode == "xgetimage";
-    private static readonly bool ForceComposite = CaptureMode == "composite";
-    private static bool _captureModeLogged;
-    private static bool? _compositeAvailable;
-
     public bool TryCapture()
     {
         if (!IsAvailable) return false;
-        if (ForceGetImage)
-        {
-            if (!_captureModeLogged)
-            {
-                _captureModeLogged = true;
-                Log.Write("capture path forced to XGetImage (GEMPRISM_CAPTURE=xgetimage)");
-            }
-            return TryCaptureFallback();
-        }
-        if (ForceComposite)
-        {
-            if (!_captureModeLogged)
-            {
-                _captureModeLogged = true;
-                Log.Write("capture path forced to XComposite pixmap (GEMPRISM_CAPTURE=composite)");
-            }
-            if (TryCaptureComposite())
-                return true;
-        }
         if (X11Native.XShmGetImage(_display.Handle, _window, _image, 0, 0, X11Native.AllPlanes) != 0)
         {
             _usingShm = true;
@@ -125,47 +99,6 @@ public sealed class X11Capture : IDisposable
             Log.Write($"XShmGetImage failed (XLastError={X11Display.LastError}); falling back to XGetImage");
         }
         return TryCaptureFallback();
-    }
-
-    private bool TryCaptureComposite()
-    {
-        _compositeAvailable ??= ProbeComposite();
-        if (_compositeAvailable != true) return false;
-
-        ulong pixmap = 0;
-        try
-        {
-            pixmap = X11Native.XCompositeNameWindowPixmap(_display.Handle, _window);
-            if (pixmap == 0) return false;
-            if (X11Native.XShmGetImage(_display.Handle, pixmap, _image, 0, 0, X11Native.AllPlanes) != 0)
-            {
-                _usingShm = true;
-                return true;
-            }
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-        finally
-        {
-            if (pixmap != 0)
-                X11Native.XFreePixmap(_display.Handle, pixmap);
-        }
-    }
-
-    private static bool ProbeComposite()
-    {
-        try
-        {
-            using var display = new X11Display();
-            return X11Native.XCompositeQueryExtension(display.Handle, out _, out _) != 0;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private bool TryCaptureFallback()
