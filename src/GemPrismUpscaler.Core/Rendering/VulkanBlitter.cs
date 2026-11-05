@@ -407,7 +407,10 @@ public sealed unsafe class VulkanBlitter : IDisposable
             ArrayLayers = 1,
             Samples = SampleCountFlags.Count1Bit,
             Tiling = ImageTiling.Optimal,
-            Usage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
+            // The full-frame path clears the composed image through
+            // TRANSFER_DST_OPTIMAL, so TRANSFER_DST is required as well.
+            Usage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit |
+                    ImageUsageFlags.TransferDstBit,
             SharingMode = SharingMode.Exclusive,
             InitialLayout = ImageLayout.Undefined
         };
