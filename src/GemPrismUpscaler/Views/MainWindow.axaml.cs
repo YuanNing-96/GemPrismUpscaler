@@ -545,7 +545,10 @@ public partial class MainWindow : Window
         if (match is null)
         {
             _activeProfile = null;
-            ProfileStatusText.Text = $"当前窗口未匹配 Profile：{info.ClassName}";
+            string id = string.IsNullOrWhiteSpace(info.ClassName)
+                ? $"pid={info.Pid}（WM_CLASS 为空，请改用 exe 匹配）"
+                : info.ClassName;
+            ProfileStatusText.Text = $"当前窗口未匹配 Profile：{id}";
             return;
         }
 

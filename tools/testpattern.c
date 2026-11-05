@@ -51,6 +51,10 @@ int main(int argc, char **argv) {
     if (x < 0) x = 0; if (y < 0) y = 0;
     Window win = XCreateSimpleWindow(d, RootWindow(d, scr), x, y, width, height, 0, 0, 0x101010);
     XStoreName(d, win, "M1b Test Pattern");
+    XClassHint class_hint;
+    class_hint.res_name = (char*)"testpattern";
+    class_hint.res_class = (char*)"testpattern";
+    XSetClassHint(d, win, &class_hint);
     Atom netpid = XInternAtom(d, "_NET_WM_PID", False);
     unsigned long pid = (unsigned long)getpid();
     XChangeProperty(d, win, netpid, XA_CARDINAL, 32, PropModeReplace, (unsigned char*)&pid, 1);

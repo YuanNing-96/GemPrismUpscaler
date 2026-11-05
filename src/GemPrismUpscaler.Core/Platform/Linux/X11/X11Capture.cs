@@ -84,10 +84,23 @@ public sealed class X11Capture : IDisposable
     }
 
     private bool _shmFailureLogged;
+    private static readonly bool ForceGetImage = string.Equals(
+        Environment.GetEnvironmentVariable("GEMPRISM_CAPTURE"), "xgetimage",
+        StringComparison.OrdinalIgnoreCase);
+    private static bool _captureModeLogged;
 
     public bool TryCapture()
     {
         if (!IsAvailable) return false;
+        if (ForceGetImage)
+        {
+            if (!_captureModeLogged)
+            {
+                _captureModeLogged = true;
+                Log.Write("capture path forced to XGetImage (GEMPRISM_CAPTURE=xgetimage)");
+            }
+            return TryCaptureFallback();
+        }
         if (X11Native.XShmGetImage(_display.Handle, _window, _image, 0, 0, X11Native.AllPlanes) != 0)
         {
             _usingShm = true;

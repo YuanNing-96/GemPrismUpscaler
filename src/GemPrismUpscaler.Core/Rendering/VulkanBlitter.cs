@@ -46,6 +46,10 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private VkSemaphore _imageAvailable;
     private VkSemaphore[] _renderSemaphores = Array.Empty<VkSemaphore>();
     private Fence _inFlight;
+    private readonly bool _waitPresent = string.Equals(
+        Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_WAIT"), "1",
+        StringComparison.OrdinalIgnoreCase);
+    private bool _waitPresentLogged;
     private CommandPool _commandPool;
     private CommandBuffer _commandBuffer;
     private Image _sourceImage;
@@ -750,6 +754,15 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Result pr = _swapchainExt.QueuePresent(_queue, &present);
         if (pr != Result.Success && pr != Result.SuboptimalKhr)
             throw new InvalidOperationException($"vkQueuePresentKHR failed: {pr}");
+        if (_waitPresent)
+        {
+            if (!_waitPresentLogged)
+            {
+                _waitPresentLogged = true;
+                Log.Info("present wait enabled (GEMPRISM_PRESENT_WAIT=1)");
+            }
+            _vk.QueueWaitIdle(_queue);
+        }
         LastPresentCpuMs = presentClock.Elapsed.TotalMilliseconds;
         LastTotalCpuMs = totalClock.Elapsed.TotalMilliseconds;
     }
