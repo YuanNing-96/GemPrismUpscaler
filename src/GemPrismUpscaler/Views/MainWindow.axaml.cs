@@ -29,6 +29,11 @@ public partial class MainWindow : Window
     private string _runningTitle = string.Empty;
     private string _sessionHotkey = HotkeyBinding.Default.ToString();
     private ProfileConfig? _activeProfile;
+    private string? _baseEffect;
+    private string? _baseScaling;
+    private string? _baseMonitor;
+    private bool _baseFollowFocus;
+    private bool _hasProfileBase;
     private TrayService? _tray;
     private bool _exitRequested;
 
@@ -544,13 +549,23 @@ public partial class MainWindow : Window
         var match = ProfileMatcher.Match(_config.Profile, info);
         if (match is null)
         {
-            _activeProfile = null;
+            if (_activeProfile is not null)
+            {
+                RestoreProfileBase();
+                _activeProfile = null;
+                ProfileStatusText.Text = "当前窗口未匹配 Profile，已恢复全局设置";
+                return;
+            }
+
             string id = string.IsNullOrWhiteSpace(info.ClassName)
                 ? $"pid={info.Pid}（WM_CLASS 为空，请改用 exe 匹配）"
                 : info.ClassName;
             ProfileStatusText.Text = $"当前窗口未匹配 Profile：{id}";
             return;
         }
+
+        if (_activeProfile is null)
+            CaptureProfileBase();
 
         var profile = match.Profile;
         _activeProfile = profile;
@@ -568,9 +583,34 @@ public partial class MainWindow : Window
         AppendLog($"profile '{profile.Name}' matched by {match.Field}={match.Value}");
     }
 
+    private void CaptureProfileBase()
+    {
+        _baseEffect = (EffectCombo.SelectedItem as EffectDefinition)?.Id;
+        _baseScaling = StretchCheck.IsChecked == true ? "stretch" : "fit";
+        _baseMonitor = (MonitorCombo.SelectedItem as MonitorChoice)?.Name ?? "auto";
+        _baseFollowFocus = FollowFocusCheck.IsChecked == true;
+        _hasProfileBase = true;
+    }
+
+    private void RestoreProfileBase()
+    {
+        if (!_hasProfileBase) return;
+        SelectEffect(EffectCombo, _baseEffect ?? PreferredEffect);
+        StretchCheck.IsChecked = string.Equals(_baseScaling, "stretch", StringComparison.OrdinalIgnoreCase);
+        SelectMonitor(_baseMonitor ?? "auto");
+        FollowFocusCheck.IsChecked = _baseFollowFocus;
+        _hasProfileBase = false;
+    }
+
     private void SelectMonitor(string name)
     {
         if (MonitorCombo.ItemsSource is not IEnumerable<MonitorChoice> choices) return;
+        if (string.IsNullOrWhiteSpace(name) || string.Equals(name, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            if (choices.FirstOrDefault() is { } auto)
+                MonitorCombo.SelectedItem = auto;
+            return;
+        }
         var match = choices.FirstOrDefault(c =>
             string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
         if (match is not null) MonitorCombo.SelectedItem = match;
