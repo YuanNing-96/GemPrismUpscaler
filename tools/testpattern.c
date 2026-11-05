@@ -5,6 +5,7 @@
 //   --dirty       draw once, then change a 64x64 block after --delay-ms
 //   --animate     move a 64x64 block continuously (small dirty regions)
 //   --repaint     redraw the same frame continuously (XDamage fires, pixels do not)
+//   --counter     large frame counter + top/bottom parity bars (debug frame order)
 //   --popup       create a same-PID popup after 2s and close it after 3s
 //   --size WxH    source size (default 1280x720)
 //   --win-id-file PATH   write the window id immediately (for scripts)
@@ -24,8 +25,45 @@ static volatile sig_atomic_t stop_flag = 0;
 static void onsig(int s) { (void)s; stop_flag = 1; }
 static long now_ms(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L; }
 
+static void draw_counter(Display *d, Window win, GC gc, int frame, int width, int height) {
+    static const int segs[10][7] = {
+        {1,1,1,1,1,1,0}, {0,1,1,0,0,0,0}, {1,1,0,1,1,0,1}, {1,1,1,1,0,0,1},
+        {0,1,1,0,0,1,1}, {1,0,1,1,0,1,1}, {1,0,1,1,1,1,1}, {1,1,1,0,0,0,0},
+        {1,1,1,1,1,1,1}, {1,1,1,1,0,1,1}
+    };
+    XSetForeground(d, gc, 0x000000u);
+    XFillRectangle(d, win, gc, 0, 0, width, height);
+
+    // Parity bars: a torn frame will show different top/bottom colors.
+    XSetForeground(d, gc, (frame & 1) ? 0x0000ffu : 0xff0000u);
+    XFillRectangle(d, win, gc, 0, 0, width, 10);
+    XSetForeground(d, gc, (frame & 1) ? 0xff0000u : 0x0000ffu);
+    XFillRectangle(d, win, gc, 0, height - 10, width, 10);
+
+    int digits[4];
+    int value = frame % 10000;
+    for (int i = 3; i >= 0; i--) { digits[i] = value % 10; value /= 10; }
+
+    int w = 96, h = 180, th = 16, gap = 18;
+    int total = 4 * w + 3 * gap;
+    int x0 = (width - total) / 2;
+    int y0 = (height - h) / 2;
+    for (int i = 0; i < 4; i++) {
+        int x = x0 + i * (w + gap), y = y0;
+        const int *s = segs[digits[i]];
+        XSetForeground(d, gc, 0xffffffu);
+        if (s[0]) XFillRectangle(d, win, gc, x + th, y, w - 2 * th, th);
+        if (s[1]) XFillRectangle(d, win, gc, x + w - th, y + th, th, h / 2 - 2 * th);
+        if (s[2]) XFillRectangle(d, win, gc, x + w - th, y + h / 2 + th, th, h / 2 - 2 * th);
+        if (s[3]) XFillRectangle(d, win, gc, x + th, y + h - th, w - 2 * th, th);
+        if (s[4]) XFillRectangle(d, win, gc, x, y + h / 2 + th, th, h / 2 - 2 * th);
+        if (s[5]) XFillRectangle(d, win, gc, x, y + th, th, h / 2 - 2 * th);
+        if (s[6]) XFillRectangle(d, win, gc, x + th, y + h / 2 - th / 2, w - 2 * th, th);
+    }
+}
+
 int main(int argc, char **argv) {
-    int mode_static = 0, mode_dirty = 0, mode_animate = 0, mode_repaint = 0, popup = 0;
+    int mode_static = 0, mode_dirty = 0, mode_animate = 0, mode_repaint = 0, mode_counter = 0, popup = 0;
     int width = 1280, height = 720, delay_ms = 3000, duration_ms = 0;
     const char *win_id_file = NULL;
     for (int i = 1; i < argc; i++) {
@@ -33,6 +71,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--dirty")) mode_dirty = 1;
         else if (!strcmp(argv[i], "--animate")) mode_animate = 1;
         else if (!strcmp(argv[i], "--repaint")) mode_repaint = 1;
+        else if (!strcmp(argv[i], "--counter")) mode_counter = 1;
         else if (!strcmp(argv[i], "--popup")) popup = 1;
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &width, &height);
         else if (!strcmp(argv[i], "--delay-ms") && i + 1 < argc) delay_ms = atoi(argv[++i]);
@@ -69,10 +108,11 @@ int main(int argc, char **argv) {
         FILE *f = fopen(win_id_file, "w");
         if (f) { fprintf(f, "0x%lx\n", win); fclose(f); }
     }
-    printf("testpattern pid=%lu win=0x%lx size=%dx%d mode=%s%s%s%s popup=%d\n",
+    printf("testpattern pid=%lu win=0x%lx size=%dx%d mode=%s%s%s%s%s popup=%d\n",
         pid, win, width, height,
         mode_static ? "static " : "", mode_dirty ? "dirty " : "",
-        mode_animate ? "animate " : "", mode_repaint ? "repaint " : "", popup);
+        mode_animate ? "animate " : "", mode_repaint ? "repaint " : "",
+        mode_counter ? "counter " : "", popup);
     fflush(stdout);
 
     GC gc = XCreateGC(d, win, 0, NULL);
@@ -118,6 +158,13 @@ int main(int argc, char **argv) {
             XDestroyWindow(d, popup_win); XFlush(d); popup_win = 0; popup_shown = 0; popup = 0;
         }
 
+        if (mode_counter) {
+            draw_counter(d, win, gc, frame, width, height);
+            XFlush(d);
+            frame++;
+            usleep(16000);
+            continue;
+        }
         if (mode_dirty && !dirty_done && elapsed >= delay_ms) {
             for (int yy = 0; yy < mh; yy++) for (int xx = 0; xx < mw; xx++)
                 px[(size_t)(my + yy) * width + mx + xx] = 0xffff00ffu;
