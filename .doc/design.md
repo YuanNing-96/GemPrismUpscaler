@@ -467,7 +467,7 @@ DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。
 
 - ~~Anime4K 多 pass 管线的真实开销~~：M1b 已测 S/M/L（§7.8）。
 - ~~脏矩形生效时的静止画面占用~~：M1b 已测 static/repaint（§7.8）。
-- ~~4K 输出下的呈现开销~~：M1b 4K override 已测 gpuTail 约 1.7–2.0 ms；真实 4K 屏待复测。
+- ~~4K 输出下的呈现开销~~：M1b 4K override 已测 gpuTail 约 1.7–2.0 ms；真实 4K@144 已复测（§7.9）。
 - 4K 源（2×→8K）、真实游戏长稳、多 GPU/跨 GPU 仍未测。
 
 ### 7.5 M0a 本机实测（2026-11-02）
@@ -514,7 +514,7 @@ DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。
 
 ### 7.8 M1b 本机实测（v0.2.1，2026-11-05）
 
-开发机当前单屏 eDP-2 1920×1200（合成器上限约 48 fps）；4K 数据用 `--output-size 3840x2160` 覆写。
+以下为 4K 外接屏接入前的开发机数据（单屏 eDP-2 1920×1200；4K 用 `--output-size 3840x2160` 覆写）；真实 4K 外接屏结果见 §7.9。
 
 | 项 | 结果 |
 |---|---|
@@ -528,7 +528,26 @@ DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。
 | 弹窗/恢复 | 隐藏/恢复日志与强制整帧重绘正常 |
 | 零拷贝 | vkcube 线性 1-fd 导入成功；testpattern 2-fd/DCC 不适用 |
 
-`present` 约 17ms 是 `QueuePresent` 等待 vblank/队列，不是 CPU 工作；当前 48fps 是合成器上限。GPU 时间显示 60fps 预算有大量余量，真实 4K 60Hz 帧率待外接屏复测。
+`present` 约 17ms 是 `QueuePresent` 等待 vblank/队列，不是 CPU 工作；48fps 是软件 testpattern/合成测试窗口的上限。真实游戏（Vulkan、同屏）见 §7.9：4K L 59.5–60.7fps，60fps 预算余量充足。
+
+### 7.9 真实 4K 外接屏验收（2026-11-05 20:16）
+
+环境：HDMI-A-1 3840×2160@144（HDR、150%）+ DP-1 1800×2880；终末地 1280×720@60 窗口模式；UI 选 Anime4K L，输出固定 HDMI-A-1。
+
+| 项 | 结果 |
+|---|---|
+| fps | **59.5–60.7**（中位 59.9） |
+| presented | **60/s** |
+| capture | **3.3–4.6 ms**（p95 9–18 ms） |
+| diff | 0.9–1.9 ms |
+| gpuEffect / gpuTail | 1.1–2.0 / 0.8–1.1 ms |
+| CPU / GPU util | 14–26% / 60–86% |
+| 显存（整卡，含游戏） | 4796–4932 MiB |
+
+- 游戏窗口与 overlay 的 MangoHud **均显示 60**；4K/60 通过，无需改刷新率。
+- 对照：软件 testpattern 4K 37–38fps（capture 23ms）、vkcube 跨屏 50.9–59.8fps（capture 11–14ms）。差异在源窗口的 capture 路径，不在 Anime4K。
+- 不要把 testpattern 的 4K fps 当真实游戏上限；4K fps 验收应以真实游戏/Vulkan 源为准。
+- 日志：`.agent/logs/endfield-4k-l.log`；完整测试报告：`.agent/M1b测试报告.md`。
 
 ---
 
@@ -544,8 +563,8 @@ DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。
 | 色彩空间 | HDR 游戏可能发灰或偏亮 | M1a 为 SDR 直通；HDR 桌面下 SDR 内容用户实测正常；HDR/linear 留 M2 |
 | 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出，M2 再评估 |
 | XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |
-| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行，腐姬按源上限；M1a/M1b 需要分别在一屏和双屏环境复测 |
-| 脏矩形边界/halo | 块缝、文字/1px 线断裂 | manifest radius + 2px 安全余量；one-shot 与整帧截图 `AE=0`；真实游戏待验收 |
+| 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行；M1b 终末地 4K L 已测 59.5–60.7fps，M1a 老功能留 1.0 回归 |
+| 脏矩形边界/halo | 块缝、文字/1px 线断裂 | manifest radius + 2px 安全余量；one-shot、弹窗、resize 与整帧截图 `AE=0`；终末地 4K L 59.5–60.7fps |
 | 零拷贝 DCC/多 fd | 导入失败或画面错 | 运行时检查 `nfd==1 && modifier==0`，否则回退 XShm；M1b 不默认启用 |
 | 4K 源分块哈希 | CPU 约 4 倍（~4ms/帧） | M1b 只承诺常见 VN 分辨率；4K 源在 M2/后续优化（128px tile、SIMD、GPU hash） |
 

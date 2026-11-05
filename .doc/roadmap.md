@@ -53,7 +53,7 @@ X11/XWayland 游戏窗口
 5. M0a/M0b 的弹窗、最小化、焦点、热键、关闭游戏、静止画面不重复呈现全部回归。
 6. 构建 0 warning / 0 error；测试通过。
 
-### M1b · 效率与 Anime4K S/M/L（v0.2.1，开发完成，待外接屏验收）
+### M1b · 效率与 Anime4K S/M/L（v0.2.1，已完成 4K 外接屏验收）
 
 | 模块 | 状态 | 内容 |
 |---|---|---|
@@ -65,9 +65,9 @@ X11/XWayland 游戏窗口
 
 **验收标准**：
 
-1. 静止对话画面 GPU 占用低于 2%：开发侧 `static` 0 capture/0 present、`repaint` captured≈60/presented=0、`gpu=n/a`、整卡 0%；外接屏复测待做。
-2. 脏矩形开启后画面无块状伪影，文本/1px 线正确；动态帧率不低于 M1a：开发侧 `dirty` 与 `--no-dirty-rect` 最终截图 `AE=0`；`animate` 两者均 47.9 fps（当前合成器上限）。
-3. S/M/L 可切换；默认 S；M/L 的实测帧率、显存、GPU 占用记录在案：开发侧 4K override 数据 S 0.65 ms/555 MiB、M 1.3–1.5 ms/585 MiB、L 2.1–2.3 ms/593 MiB（gpuEffect）；详见 `.agent/M1b验收记录.md`。
+1. 静止对话画面 GPU 占用低于 2%：开发侧 `static` 0 capture/0 present、`repaint` captured≈60/presented=0、`gpu=n/a`、整卡 0%；外接 4K 复测已完成。
+2. 脏矩形开启后画面无块状伪影，文本/1px 线正确；动态帧率不低于 M1a：开发侧 `dirty` 与 `--no-dirty-rect` 最终截图 `AE=0`；4K A/B 37.81 vs 37.77 fps（差 0.79%，软件 testpattern）；真实游戏 4K L 59.5–60.7 fps。
+3. S/M/L 可切换；默认 S；4K 实测已记录：真实游戏 L 59.5–60.7 fps、gpuEffect 1.1–2.0 ms；S/M/L 全帧 gpuEffect 0.36/0.79/1.11 ms（testpattern）；详见 `.agent/M1b验收记录.md`。
 4. 零拷贝 spike 有明确 go/no-go 结论，不把未验证路径放进默认链路：结论为**有条件 go**，详见 [zero-copy-spike.md](zero-copy-spike.md)。
 
 ### M1c · 设置、托盘、动画与扩展

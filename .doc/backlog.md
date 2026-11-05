@@ -31,7 +31,7 @@ M1a 只保留主界面上的窗口/显示器/算法选择；完整设置界面�
 
 ## 3. M1b 已完成 / 后续项
 
-- **Anime4K S/M/L**：✅ M1b 已接入 manifest 驱动 N-pass；默认 S；4K override 数据已记录；真实 4K 屏待复测。
+- **Anime4K S/M/L**：✅ M1b 已接入 manifest 驱动 N-pass；默认 S；4K override 与真实 4K@144（终末地 720p60 + L，59.5–60.7 fps）数据已记录。
 - **分块脏矩形**：✅ M1b 已接入 64px 哈希 + halo + 分块上传/局部重算 + 持久合成图；`--no-dirty-rect` 可回退。
 - **零拷贝 spike**：✅ 有条件 go；GPU 窗口线性 1-fd 可导入，2-fd/DCC 需回退；不默认启用；见 `.doc/zero-copy-spike.md`。
 - **指标/CSV**：✅ M1b 已接入；后续可加 UI 仪表/告警（M1c）。

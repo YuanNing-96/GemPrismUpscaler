@@ -4,7 +4,7 @@
 
 宝石棱镜把低分辨率的游戏窗口实时超分到全屏显示。它支持任意分辨率与任意宽高比的组合，目标是通过可配置的 effect 管线组合 Anime4K、FSR 等算法。它不修改游戏、不注入 DLL、不依赖 gamescope，因此对 32/64 位、D3D9/11/12/OpenGL/Vulkan 游戏一视同仁。
 
-当前版本是 **v0.2.1（M1b）**：在 M1a 的单实例/退出审计/多显示器基础之上，加入 **Anime4K S/M/L**、**分块脏矩形**、**分阶段指标** 和 **零拷贝可行性 spike**。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。M1b 的 4K 真实外接屏验收待用户接屏后执行，开发侧自动化与 1920×1200/4K override 数据已完成。
+当前版本是 **v0.2.1（M1b）**：在 M1a 的单实例/退出审计/多显示器基础之上，加入 **Anime4K S/M/L**、**分块脏矩形**、**分阶段指标** 和 **零拷贝可行性 spike**。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。M1b 已在真实 4K@144 外接屏（HDMI-A-1，HDR/150%）+ 终末地 1280×720@60 上验收：Anime4K L 稳定 59.5–60.7 fps。
 
 ## 支持范围
 
@@ -29,7 +29,7 @@
 |---|---|
 | 发行版 | Arch Linux 系 |
 | 桌面 | KDE Plasma 6，Wayland 会话 + XWayland |
-| 显示 | 目标双屏环境：HDMI-A-1 3840×2160@144Hz（HDR，150%，主屏）+ DP-1 1800×2880 竖屏（SDR，100%）；M1b 开发机当前为 eDP-2 1920×1200，4K 数据用 `--output-size 3840x2160` 覆写得到 |
+| 显示 | HDMI-A-1 3840×2160@144Hz（HDR，150%，主屏）+ DP-1 1800×2880 竖屏（SDR，100%）；M1b 已在此双屏环境完成真实 4K/60 验收 |
 | GPU | AMD iGPU + NVIDIA RTX 4060 Laptop 8 GB；effect 在 NVIDIA |
 | .NET | 10.0.114 SDK |
 | Vulkan | 1.4，NVIDIA 专有驱动 |
@@ -39,7 +39,7 @@
 
 - Linux，X11 或 XWayland；Vulkan 1.2 及以上
 - .NET 10 SDK（仅构建需要；运行使用构建产物）
-- 4K 输出建议 ≥2 GB 显存；M1b 实测 4K 输出约 555–593 MiB（S/M/L）
+- 4K 输出建议 ≥2 GB 显存；M1b 4K S/M/L 测试图案的整卡占用约 782/812/820 MiB，真实游戏 + overlay 合计约 4.8–4.9 GiB（含游戏）
 - 可选：`glslangValidator`、`spirv-val`（仅重新生成着色器时需要）
 - 不再需要 CMake/C++ 原生库：X11 使用 P/Invoke，Vulkan 使用 Silk.NET
 
@@ -115,10 +115,10 @@ engine started version=0.2.1 effect=anime4k-s ... monitor=HDMI-A-1 ...
 每秒的 `stats` 行示例：
 
 ```text
-stats fps=47.9 captured=48 presented=48 capture=0.45/0.67ms diff=1.05/1.16ms upload=0.00/0.00ms effect=0.11/0.21ms present=17.04/18.18ms gpuUpload=0.03ms gpuEffect=0.07ms gpuTail=0.13ms cpu=10.1% gpuUtil=15% vram=466/8188MiB ...
+stats fps=59.9 captured=60 presented=60 capture=3.17/9.10ms diff=1.08/1.76ms upload=0.43/0.60ms effect=0.24/0.37ms present=0.18/0.33ms gpuUpload=0.57ms gpuEffect=1.15ms gpuTail=0.83ms cpu=16.7% gpuUtil=62% vram=4796/8188MiB ...
 ```
 
-阶段值是 `平均/p95` 毫秒；`present` 包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；`gpu=n/a` 表示该秒没有提交帧（静止）。
+示例为真实游戏 1280×720@60 → 4K Anime4K L，显存含游戏。阶段值是 `平均/p95` 毫秒；`present` 包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；`gpu=n/a` 表示该秒没有提交帧（静止）。
 
 ## 测试与基准
 
@@ -137,10 +137,9 @@ stats fps=47.9 captured=48 presented=48 capture=0.45/0.67ms diff=1.05/1.16ms upl
 ./tools/bench-m1b.sh --effect anime4k-s --pattern animate --seconds 10
 ./tools/bench-m1b.sh --effect anime4k-s --pattern animate --seconds 10 --no-dirty-rect
 
-# S/M/L 4K 数据（无 4K 屏时用 override）
+# S/M/L 4K 数据（真实 4K 屏用 --monitor；无 4K 屏改用 --output-size 3840x2160）
 for e in anime4k-s anime4k-m anime4k-l; do
-  ./tools/bench-m1b.sh --effect "$e" --pattern animate --seconds 10 \
-    --output-size 3840x2160
+  ./tools/bench-m1b.sh --monitor HDMI-A-1 --effect "$e" --pattern animate --seconds 10
 done
 ```
 
@@ -161,7 +160,7 @@ done
 ## 已知限制
 
 - 脏矩形哈希在 720p 约 1 ms/帧；4K 源约 4 倍，M1b 只承诺常见 VN 分辨率。
-- 当前开发机合成器约 48 fps 上限；4K 真实外接屏/60Hz 帧率待验收。
+- 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
 - 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
 - 零拷贝只完成“导出 + Vulkan 导入”可行性，未做 fence 同步和真实游戏端到端验证，**不进入默认链路**。详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
 - 多显示器完整热插拔/每屏 DPI、原生 Wayland、HDR/linear 色彩管理仍在 M2。

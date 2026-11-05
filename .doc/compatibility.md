@@ -38,8 +38,8 @@
 |---|---|
 | 发行版 | Arch Linux 系 |
 | 桌面 | KDE Plasma 6，Wayland 会话 + XWayland |
-| 显示器 | 目标双屏：HDMI-A-1 3840×2160@144Hz，HDR，150%，主屏，位于 root `+1800+489`；DP-1 1800×2880 竖屏，SDR，100%，位于 `0,0`。M1b 开发机当前为 eDP-2 1920×1200；4K 用 `--output-size 3840x2160` 覆写 |
-| XWayland root | 双屏 5640×2880；M1b 当前单屏 1920×1200 |
+| 显示器 | HDMI-A-1 3840×2160@144Hz，HDR，150%，主屏，位于 root `+1800+489`；DP-1 1800×2880 竖屏，SDR，100%，位于 `0,0`。M1b 已在此双屏环境完成真实 4K/60 验收 |
+| XWayland root | 双屏 5640×2880 |
 | GPU | AMD iGPU + NVIDIA RTX 4060 Laptop 8 GB；effect 在 NVIDIA |
 | .NET | 10.0.114 SDK |
 | Vulkan | 1.4 |
@@ -47,14 +47,14 @@
 
 ## 3. 已验证的行为
 
-- 1280×720 → 3840×2160 动态画面约 42–51 fps（当前 HDR/144Hz 桌面的合成器上限约 48–50 fps）。
+- 1280×720 → 3840×2160：软件 testpattern 动态约 37–38 fps（capture≈23 ms）；真实 Vulkan 游戏（终末地 720p@60）+ Anime4K L 稳定 59.5–60.7 fps（capture 3.3–4.6 ms）。
 - 1280×720 → 1800×2880 竖屏 fit：内容 1800×1012，上下黑边，约 46–50 fps（合成测试窗口）。
 - 静止画面：首次捕获/呈现后 0 capture / 0 present；每帧重绘同像素时 captured≈60、presented=0，整卡 GPU 0%。
 - 4:3 fit（1024×768 → 2880×2160）：左右黑边像素均值 0，内容居中。
 - 弹窗、最小化、焦点跟随、热键、关闭游戏、单实例、跨屏自动跟随。
 - HDR 桌面下 SDR 内容可正常显示，不发灰；未做 HDR 色彩管理。
-- M1b 脏矩形 one-shot：与 `--no-dirty-rect` 最终截图 `AE=0`；小脏块动画 47.9 fps、diff≈1.05ms。
-- M1b 4K override：S/M/L 的 gpuEffect 约 0.65/1.3–1.5/2.1–2.3ms，显存 555/585/593MiB；当前合成器上限 48fps。
+- M1b 脏矩形 one-shot：与 `--no-dirty-rect` 最终截图 `AE=0`；4K 小脏块动画 A/B 差 0.79%（软件 testpattern），真实游戏 L 59.5–60.7 fps。
+- M1b 真实 4K@144：终末地 720p60 + L，fps 59.5–60.7、gpuEffect 1.1–2.0ms；S/M/L 全帧 gpuEffect 0.36/0.79/1.11ms（testpattern），整卡显存 782/812/820MiB（空闲桌面）。
 - 双线性、弹窗让位/恢复、退出路径在 M1b 回归通过。
 
 ## 4. 已知限制
@@ -72,8 +72,8 @@
 11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
 12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
 13. **零拷贝**：只在 vkcube 线性 1-fd 上验证导入；软件窗口 2-fd/DCC 回退 XShm；未做 fence 同步/真实游戏/跨 GPU，未进默认链路。
-14. **present 计时**：包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；当前 48fps 是合成器上限。
-15. **4K 外接屏**：开发机当前无 4K 屏，4K 数据来自 `--output-size` 覆写；真实 4K 60Hz 帧率待用户复测。
+14. **present 计时**：包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；软件 testpattern 4K 约 37–38fps，真实游戏 4K L 59.5–60.7fps。
+15. **4K 外接屏**：已在 HDMI-A-1 3840×2160@144 + 终末地 1280×720@60 + Anime4K L 上实测 59.5–60.7fps；4K 源（2×→8K）仍未测。
 
 ## 5. 平台差异
 

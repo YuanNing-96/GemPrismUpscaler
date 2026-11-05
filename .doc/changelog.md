@@ -13,23 +13,27 @@ M1b 把 effect 管线从 5-pass 硬编码改成 manifest 驱动的 N-pass，加�
 - **零拷贝 spike**：`tools/zero-copy/` 的 DRI3 导出与 Vulkan 导入探针；GPU 窗口（vkcube）线性 1-fd 导入成功，软件窗口 2-fd/DCC 需回退；结论“有条件 go”，不进默认链路；详见 `.doc/zero-copy-spike.md`。
 - **版本**：0.2.1；`--version`、日志、文档同步。
 
+### 修复
+
+- **持久合成图 usage**：`VulkanBlitter` 创建 composed image 时补 `VK_IMAGE_USAGE_TRANSFER_DST_BIT`；全帧 clear 不再触发 `VUID-VkImageMemoryBarrier-oldLayout-01213` / `VUID-vkCmdClearColorImage-image-00002`（修复前每轮 3 条，修复后 0 条；脏块/弹窗恢复 AE 仍为 0）。
+
 ### 验证
 
 - `dotnet build -c Release`：0 warning / 0 error；`dotnet test -c Release`：53/53。
 - 1280×720 静态：`captured=0 presented=0 gpu=n/a`，整卡 0%；每帧重绘同像素：`captured≈60 presented=0`。
 - 小脏块 one-shot：脏矩形与 `--no-dirty-rect` 最终截图 `AE=0`（逐像素一致）；文本/1px 网格无块缝。
-- 小脏块动画：`diff≈1.05 ms`、`gpuEffect≈0.02–0.17 ms`、`gpuTail≈0.1–0.3 ms`，47.9 fps（当前合成器上限）。
-- 全屏动画：脏矩形开/关均 47.9 fps；GPU effect 约 2.9 ms（1920×1200），4K override 下 S/M/L 约 0.65/1.3–1.5/2.1–2.3 ms，显存 555/585/593 MiB。
+- 小脏块动画：`diff≈1.05 ms`、`gpuEffect≈0.02–0.17 ms`、`gpuTail≈0.1–0.3 ms`，47.9 fps（软件 testpattern/开发机数据；真实 4K 游戏见下条）。
+- 全屏动画（软件 testpattern）：脏矩形开/关均 47.9 fps；GPU effect 约 2.9 ms（1920×1200），4K override 下 S/M/L 约 0.65/1.3–1.5/2.1–2.3 ms，显存 555/585/593 MiB。
 - 双线性回归、弹窗让位/恢复、单实例、退出路径保持正常。
-- M1a 的真实双屏/外接屏 4K 帧率待用户接屏后按验收记录复测。
+- **真实 4K/60**：外接 HDMI-A-1 3840×2160@144（HDR、150%）+ 终末地 1280×720@60 + Anime4K L：`fps=59.5–60.7`、`presented=60/s`、`capture=3.3–4.6 ms`、`gpuEffect=1.1–2.0 ms`；游戏与 overlay 两个 MangoHud 均 60。
 
 ### 注意事项
 
-- 当前开发机合成器约 48 fps 上限，不能据此判断 60/144Hz 上限。
+- 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。不要把 testpattern 的 fps 当真实游戏上限。
 - 4K 源（2×→8K）未测；脏矩形哈希 720p 约 1 ms/帧，4K 源约 4 倍。
 - 零拷贝只验证导出+导入，未做 fence 同步/端到端画面，不进入默认链路。
 - `present` 计时包含 `QueuePresent` 的 vblank/队列等待。
-- 4K 数据用 `--output-size 3840x2160` 在 1920×1200 屏上覆写得到；真实外接屏仍需复测。
+- 真实 4K@144 外接屏已复测（Endfield 4K L 59.5–60.7 fps）；4K 源（2×→8K）仍未测。
 
 ## v0.2.0（2026-11-04）· M1a：单实例、退出审计与多显示器基础
 
