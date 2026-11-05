@@ -47,6 +47,10 @@ public sealed class X11Overlay : IDisposable
     public void Show()
     {
         if (_disposed || IsVisible) return;
+        // Do not map the window with the previous swapchain image: that looks
+        // like a past frame flashing back after a focus/popup hide. Paint the
+        // black background first; the engine renders a fresh frame next.
+        X11Native.XClearWindow(_display.Handle, Window);
         X11Native.XMapRaised(_display.Handle, Window);
         _display.Sync();
         IsVisible = true;

@@ -307,6 +307,7 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XQueryPointer(IntPtr display, ulong window, out ulong root, out ulong child,
         out int rootX, out int rootY, out int winX, out int winY, out uint mask);
     [DllImport(X11)] public static extern int XGetInputFocus(IntPtr display, out ulong focus, out int revertTo);
+    [DllImport(X11)] public static extern int XClearWindow(IntPtr display, ulong window);
 
     [DllImport(Xext)] public static extern int XShmQueryExtension(IntPtr display);
     [DllImport(Xext)] public static extern IntPtr XShmCreateImage(IntPtr display, IntPtr visual, uint depth, int format, IntPtr data,

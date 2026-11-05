@@ -43,6 +43,8 @@ public sealed class UpscaleSession : IDisposable
     private bool _disposed;
     private Exception? _initError;
     private bool _focusedOnce;
+    private long _focusLostAt;
+    private const int FocusLossGraceMs = 300;
     private bool _forceRedraw = true;
     private readonly FrameDiff _diff = new();
     private List<MonitorInfo> _monitors = new();
@@ -379,6 +381,7 @@ public sealed class UpscaleSession : IDisposable
             FocusSource();
             _visibility.FocusLost = false;
             _focusedOnce = true;
+            _focusLostAt = 0;
         }
 
         ApplyVisibility();
@@ -410,6 +413,7 @@ public sealed class UpscaleSession : IDisposable
                     FocusSource();
                     _visibility.FocusLost = false;
                     _focusedOnce = true;
+                    _focusLostAt = 0;
                 }
                 ApplyVisibility();
                 dirty = true;
@@ -428,6 +432,7 @@ public sealed class UpscaleSession : IDisposable
                         FocusSource();
                         _visibility.FocusLost = false;
                         _focusedOnce = true;
+                        _focusLostAt = 0;
                     }
                     if (ev.Detail == 4 || ev.Detail == 5)
                         _input.ForwardWheel((int)ev.X, (int)ev.Y, Mapper, ev.Detail == 4);
@@ -489,14 +494,25 @@ public sealed class UpscaleSession : IDisposable
             // another app" and must not make the overlay hide itself.
             bool focused = X11WindowProbe.IsFocused(_display, _source.WindowId) ||
                            (_overlay is not null && X11WindowProbe.IsFocused(_display, _overlay.Window));
+            long focusNow = Environment.TickCount64;
             if (focused)
             {
                 _focusedOnce = true;
                 _visibility.FocusLost = false;
+                _focusLostAt = 0;
             }
             else if (_focusedOnce)
             {
-                _visibility.FocusLost = true;
+                if (_focusLostAt == 0)
+                {
+                    _focusLostAt = focusNow;
+                    X11Native.XGetInputFocus(_display.Handle, out ulong focusWindow, out _);
+                    Emit($"focus left source (focus=0x{focusWindow:x}, source=0x{_source.WindowId:x})");
+                }
+                else if (focusNow - _focusLostAt >= FocusLossGraceMs)
+                {
+                    _visibility.FocusLost = true;
+                }
             }
         }
 
