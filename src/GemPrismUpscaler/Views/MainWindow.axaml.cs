@@ -310,6 +310,7 @@ public partial class MainWindow : Window
         _config.Logging.Path = logPath;
         _config.Diagnostics.DeveloperMode = DeveloperModeCheck.IsChecked == true;
 
+        MergeProfilesFromDisk();
         try
         {
             ConfigStore.Save(_config);
@@ -629,9 +630,29 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Profiles are edited in the TOML file, not in the UI. Before any full
+    /// config save, pick up the on-disk profile list so a session start or a
+    /// settings save does not silently overwrite a newly added profile.
+    /// </summary>
+    private void MergeProfilesFromDisk()
+    {
+        try
+        {
+            var result = ConfigStore.Load();
+            if (result.FileExisted && !result.RecoveredFromError)
+                _config.Profile = result.Config.Profile;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"profile merge from disk failed: {ex.Message}");
+        }
+    }
+
     private void RememberLast(string? monitorName, ScalingMode mode)
     {
         if (!_config.General.RememberLast) return;
+        MergeProfilesFromDisk();
         _config.Last.Effect = (EffectCombo.SelectedItem as EffectDefinition)?.Id ?? "anime4k-s";
         _config.Last.Scaling = mode == ScalingMode.Stretch ? "stretch" : "fit";
         _config.Last.Monitor = monitorName ?? "auto";
