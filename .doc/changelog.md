@@ -22,10 +22,13 @@ M1c 把 M1a/M1b 的能力收拢成可日常使用的配置界面，并补齐 Ani
 - **日志 Tab 字体崩溃**：`AppendLog` 在日志页未显示时不再设置 `CaretIndex`，避免 `Could not create glyphTypeface` 导致 SIGABRT；增加 UI 线程未处理异常兜底。
 - **X11 清理/焦点竞态**：focus 前检查源窗口仍 viewable；`X11Overlay` 幂等销毁；X error 进入诊断日志。
 - **Vulkan 校验层**：Release 默认关闭，Debug/开发模式/环境变量开启；避免日常运行的性能与日志开销。
+- **配置恢复**：TOML 语法错误、无效值、未知键都视为坏配置；原文件改名为 `config.toml.bad-*`，写回修正后的配置（值坏改该值，语法错误整体回默认），避免每次启动重复生成 `.bad`。
+- **Profile 重新加载**：Profile Tab 的“重新加载”现在会重新读取 `config.toml`，而不是只刷新内存中的列表。
+- **呈现顺序**：X11/XWayland overlay 默认改用 `VK_PRESENT_MODE_FIFO_KHR`，修复偶发“旧帧短暂闪回”；如需实验可用 `GEMPRISM_PRESENT_MODE=mailbox|immediate` 覆盖。
 
 ### 验证
 
-- `dotnet build -c Release`：0 warning / 0 error（NuGet 审计缓存只读的环境警告除外）；`dotnet test -c Release`：88/88。
+- `dotnet build -c Release`：0 warning / 0 error（NuGet 审计缓存只读的环境警告除外）；`dotnet test -c Release`：91/91。
 - 自定义 effect `sharpen-2x` 在 1280×720 测试图案 + 4K 输出上成功启动并呈现，无 Vulkan 校验错误。
 - Anime4K VL 在 1280×720 测试图案 + 4K 输出上成功启动并呈现，无 Vulkan 校验错误；首帧 effect CPU 约 466ms（含 18 个 pipeline 创建），VRAM 约 880 MiB（整卡）。
 - 托盘在 KDE Wayland 下创建成功；SNI `Activate` 经 KWin 兜底把窗口带到前台。

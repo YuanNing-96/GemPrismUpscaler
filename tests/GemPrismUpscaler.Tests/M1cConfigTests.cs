@@ -152,6 +152,114 @@ public sealed class M1cConfigTests : IDisposable
         Assert.NotNull(loaded.Error);
         Assert.Equal("notify", loaded.Config.General.SecondInstance);
         Assert.Contains(Directory.GetFiles(_dir), f => f.Contains(".bad-"));
+        Assert.True(File.Exists(path));
+        Assert.False(ConfigStore.Load(path).RecoveredFromError);
+    }
+
+    [Fact]
+    public void InvalidValue_IsBackedUp_AndRewrittenWithDefaults()
+    {
+        string path = Path.Combine(_dir, "config.toml");
+        File.WriteAllText(path, """
+            schema = 1
+
+            [general]
+            second_instance = "explode"
+            close_action = "exit"
+
+            [[profile]]
+            name = "keep-me"
+            class = ["testpattern"]
+            effect = "anime4k-m"
+            """);
+
+        var loaded = ConfigStore.Load(path);
+
+        Assert.True(loaded.RecoveredFromError);
+        Assert.Equal("notify", loaded.Config.General.SecondInstance);
+        Assert.Single(loaded.Config.Profile);
+        Assert.Contains(Directory.GetFiles(_dir), f => f.Contains(".bad-"));
+        string rewritten = File.ReadAllText(path);
+        Assert.Contains("second_instance = \"notify\"", rewritten);
+        Assert.Contains("[[profile]]", rewritten);
+        Assert.False(ConfigStore.Load(path).RecoveredFromError);
+    }
+
+    [Fact]
+    public void UnknownKey_IsBackedUp_AndDropped()
+    {
+        string path = Path.Combine(_dir, "config.toml");
+        File.WriteAllText(path, """
+            schema = 1
+
+            [general]
+            second_instance = "notify"
+            typo_key = true
+
+            [unknown_section]
+            value = 1
+            """);
+
+        var loaded = ConfigStore.Load(path);
+
+        Assert.True(loaded.RecoveredFromError);
+        Assert.Contains(loaded.Warnings, w => w.Contains("typo_key"));
+        string rewritten = File.ReadAllText(path);
+        Assert.DoesNotContain("typo_key", rewritten);
+        Assert.DoesNotContain("unknown_section", rewritten);
+        Assert.False(ConfigStore.Load(path).RecoveredFromError);
+    }
+
+    [Fact]
+    public void UserReportedConfig_LoadsProfile()
+    {
+        string path = Path.Combine(_dir, "config.toml");
+        File.WriteAllText(path, """
+            schema = 1
+            [general]
+            second_instance = "notify"
+            close_action = "exit"
+            follow_focus = true
+            remember_last = true
+            auto_refresh_windows = false
+            refresh_interval_ms = 1000
+            [hotkey]
+            toggle_overlay = "Alt+Shift+A"
+            [logging]
+            path = ""
+            level = "info"
+            [display]
+            monitor = "auto"
+            [effect]
+            default = "anime4k-s"
+            scaling = "fit"
+            dirty_rect = true
+            [tray]
+            enabled = true
+            [input]
+            mode = "2d"
+            [diagnostics]
+            developer_mode = false
+            [last]
+            effect = "anime4k-s"
+            scaling = "fit"
+            monitor = "auto"
+            [[profile]]
+            name = "testpattern"
+            class = ["testpattern"]
+            exe = []
+            effect = "anime4k-m"
+            scaling = "fit"
+            """);
+
+        var loaded = ConfigStore.Load(path);
+
+        Assert.False(loaded.RecoveredFromError);
+        var profile = Assert.Single(loaded.Config.Profile);
+        Assert.Equal("testpattern", profile.Name);
+        Assert.Equal(new[] { "testpattern" }, profile.Class);
+        Assert.Empty(profile.Exe);
+        Assert.Equal("anime4k-m", profile.Effect);
     }
 
     [Fact]

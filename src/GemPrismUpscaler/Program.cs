@@ -322,8 +322,8 @@ sealed class Program
             ErrorBus.Functional("config", result.Error);
 
         Log.Info($"config loaded path={result.Path} schema={Config.Schema} " +
-                 $"fileExisted={result.FileExisted} recovered={result.RecoveredFromError} " +
-                 DiagnosticsRuntime.Describe());
+                 $"profiles={Config.Profile.Count} fileExisted={result.FileExisted} " +
+                 $"recovered={result.RecoveredFromError} " + DiagnosticsRuntime.Describe());
     }
 
     private static bool TryEffectFromArgs(string[] args, out EffectDefinition effect, out string? error)

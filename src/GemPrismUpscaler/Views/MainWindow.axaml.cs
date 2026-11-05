@@ -136,7 +136,7 @@ public partial class MainWindow : Window
         ResetSettingsButton.Click += (_, _) => ResetSettings();
         OpenConfigDirButton.Click += (_, _) => OpenPath(AppPaths.ConfigDirectory);
         OpenLogButton.Click += (_, _) => OpenPath(Log.Path);
-        ReloadProfilesButton.Click += (_, _) => RefreshProfiles();
+        ReloadProfilesButton.Click += (_, _) => ReloadProfilesFromDisk();
         OpenProfileConfigButton.Click += (_, _) => OpenConfigFile();
         ReloadEffectsButton.Click += (_, _) => ReloadEffects();
         OpenEffectsDirButton.Click += (_, _) => OpenEffectsDirectory();
@@ -714,6 +714,18 @@ public partial class MainWindow : Window
                 AppendLog($"[{error.Severity}] {error.Source}: {error.DisplayText}");
             }
         });
+    }
+
+    private void ReloadProfilesFromDisk()
+    {
+        var result = ConfigStore.Load();
+        if (result.RecoveredFromError && !string.IsNullOrWhiteSpace(result.Error))
+            ErrorBus.Functional("config", result.Error);
+
+        _config.Profile = result.Config.Profile;
+        RefreshProfiles();
+        ApplySelectedProfile();
+        ProfileStatusText.Text = $"已从磁盘重新加载 {_config.Profile.Count} 个 Profile";
     }
 
     private void RefreshProfiles()

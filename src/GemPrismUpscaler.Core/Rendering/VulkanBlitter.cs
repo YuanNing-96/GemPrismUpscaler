@@ -247,6 +247,29 @@ public sealed unsafe class VulkanBlitter : IDisposable
         catch { }
     }
 
+    private static PresentModeKHR ChoosePresentMode(PresentModeKHR* modes, uint count)
+    {
+        bool Has(PresentModeKHR mode)
+        {
+            for (int i = 0; i < count; i++)
+                if (modes[i] == mode) return true;
+            return false;
+        }
+
+        string? requested = Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_MODE")
+            ?.Trim().ToLowerInvariant();
+        if (requested == "mailbox" && Has(PresentModeKHR.MailboxKhr))
+            return PresentModeKHR.MailboxKhr;
+        if (requested == "immediate" && Has(PresentModeKHR.ImmediateKhr))
+            return PresentModeKHR.ImmediateKhr;
+
+        // FIFO is the safe default for an X11/XWayland overlay: mailbox can
+        // present frames out of order/let the compositor show a stale pixmap,
+        // which looks like an old frame flashing back. Mailbox remains available
+        // via GEMPRISM_PRESENT_MODE=mailbox for experiments.
+        return PresentModeKHR.FifoKhr;
+    }
+
     private void CreateDevice()
     {
         uint qcount = 0;
@@ -322,11 +345,11 @@ public sealed unsafe class VulkanBlitter : IDisposable
         _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &presentCount, null);
         var presentModes = stackalloc PresentModeKHR[(int)presentCount];
         _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &presentCount, presentModes);
-        PresentModeKHR presentMode = PresentModeKHR.FifoKhr;
-        for (int i = 0; i < presentCount; i++)
-        {
-            if (presentModes[i] == PresentModeKHR.MailboxKhr) { presentMode = PresentModeKHR.MailboxKhr; break; }
-        }
+        PresentModeKHR presentMode = ChoosePresentMode(presentModes, presentCount);
+        Log.Info($"swapchain present mode={presentMode}" +
+                 (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMPRISM_PRESENT_MODE"))
+                     ? " (default)"
+                     : " (GEMPRISM_PRESENT_MODE)"));
 
         Extent2D extent = caps.CurrentExtent;
         if (extent.Width == uint.MaxValue)

@@ -51,7 +51,7 @@
 
 ```bash
 dotnet build GemPrismUpscaler.slnx -c Release   # 0 warning / 0 error
-dotnet test  GemPrismUpscaler.slnx -c Release   # 88/88
+dotnet test  GemPrismUpscaler.slnx -c Release   # 91/91
 ```
 
 重新生成 S/M/L/VL 着色器与 manifest（需要 `glslangValidator` 与 `spirv-val`）：
@@ -122,7 +122,7 @@ dotnet run --project src/GemPrismUpscaler -c Release
 
 `--effect anime4k` 仍作为 S 的别名，兼容 M0b/M1a 命令；`--effect` 也接受自定义 effect 的 `id`。默认保持源宽高比（fit，4:3 源会有黑边）；`--stretch` 拉伸填满。`--monitor` 省略时自动选择窗口所在显示器；窗口跨屏移动时 overlay 会跟随重建。`--output-size` 是调试/基准用的输出尺寸覆写（可大于屏幕），正常使用不要加。
 
-配置：默认 `~/.config/GemPrismUpscaler/config.toml`；`GEMPRISM_CONFIG` 可覆盖。日志：`GEMPRISM_LOG` 可覆盖配置里的日志路径；`GEMPRISM_STATS=/path/stats.csv` 会另外写每秒一行指标 CSV；`GEMPRISM_VALIDATION=1` 可在 Release 下强制打开 Vulkan 校验层；`GEMPRISM_DEV=1` 强制开发模式。
+配置：默认 `~/.config/GemPrismUpscaler/config.toml`；`GEMPRISM_CONFIG` 可覆盖。日志：`GEMPRISM_LOG` 可覆盖配置里的日志路径；`GEMPRISM_STATS=/path/stats.csv` 会另外写每秒一行指标 CSV；`GEMPRISM_VALIDATION=1` 可在 Release 下强制打开 Vulkan 校验层；`GEMPRISM_DEV=1` 强制开发模式；`GEMPRISM_PRESENT_MODE=mailbox|immediate` 可覆盖默认的 FIFO 呈现模式（仅用于对比/实验）。
 
 日志第一行应包含：
 

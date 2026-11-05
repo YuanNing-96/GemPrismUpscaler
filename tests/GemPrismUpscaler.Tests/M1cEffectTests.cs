@@ -43,8 +43,10 @@ public sealed class M1cEffectTests : IDisposable
         Assert.Equal(EffectKind.Custom, effect.Kind);
         Assert.True(effect.IsAvailable);
         Assert.NotNull(effect.Variant);
-        Assert.Equal(1, effect.Variant!.Passes.Count);
-        Assert.Equal(2, effect.Variant.Textures.Count);
+        Assert.Single(effect.Variant!.Passes);
+        Assert.Collection(effect.Variant.Textures,
+            t => Assert.Equal("MAIN", t.Name),
+            t => Assert.Equal("upscaled2x", t.Name));
         Assert.Equal("upscaled2x", effect.Variant.OutputTexture);
         Assert.False(effect.RequiresFullFrame);
     }
