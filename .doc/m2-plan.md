@@ -436,6 +436,7 @@ GemPrismUpscaler（KDE 侧）
 - .NET 10.0.114；Avalonia 12.1.4。
 - 新增 NuGet（计划）：`NWayland` 0.11.0、`NWayland.Protocols.Wlr` 0.11.0（与 Avalonia.Wayland 12.1.4 的 NWayland 0.11.0 对齐）。
 - Wayland 运行库：`libwayland-client`、`libxkbcommon`（系统已有）。
+- 构建期：`/usr/share/dbus-1/interfaces/org.freedesktop.portal.{ScreenCast,Request,Session}.xml`（Tmds.DBus.Generator 生成代理；由 xdg-desktop-portal 包提供，后续可 vendor）。
 - Portal/PipeWire：`xdg-desktop-portal` 1.22.1、`xdg-desktop-portal-kde` 6.8.2、PipeWire 1.6.10（系统已有）。
 - Vulkan：`VK_KHR_wayland_surface`、`VK_KHR_surface`、`VK_KHR_swapchain`；DMA-BUF 扩展（M2c）。
 - M2b：`sway`（用户手动安装）；`NWayland.Protocols.Wlr` 的 screencopy/virtual pointer；虚拟键盘绑定待定。
