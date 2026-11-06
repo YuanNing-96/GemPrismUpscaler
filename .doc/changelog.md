@@ -17,6 +17,7 @@ M2a 把呈现从 X11 override-redirect 扩展到 Wayland layer-shell，并加入
 ### 已知限制
 
 - **portal GlobalShortcuts 未接**：XWayland 焦点下 `XGrabKey` 仍可用；原生 Wayland 焦点下不保证。
+- **KDE 窗口流按输出 scale 合成**：720p 全屏游戏在 4K/150% 输出上 `pipewire caps` 为 3840×2160；2× 会产生 8K 中间纹理（实测 VL 10–12fps、VRAM 7.6GB、GPU 100%）且没有真实超分收益。M2a 在源尺寸 >= 输出尺寸时自动降级 bilinear；低分辨率原生源需 M2b 嵌套合成器或改用 XWayland 窗口捕获。
 - **窗口化原生捕获含标题栏/阴影**：KDE 窗口流为 960×582（150% + 装饰）；M2a 正式验收以全屏/无边框源为准，窗口化原生输入由 M2b 嵌套合成器解决。
 - **XWayland 捕获撕裂**仍用 XShm；最终方案在 M2c。
 - **wlroots 真实桌面**未验证；M2 只做协议级。

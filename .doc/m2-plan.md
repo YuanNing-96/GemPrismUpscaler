@@ -247,6 +247,7 @@ mode = "auto"        # auto | passthrough | forward
   - caps 从 gst `-v` stdout 解析（KDE 窗口流可能没有 `size` 属性）。
   - 实测 vkcube 640×360 窗口：`pipewire caps 960x582`（150% + 窗口装饰）、60–69fps、GPU 59–68%、dest=3563×2160。
   - 已知：KDE 窗口捕获包含标题栏/阴影；M2a 的正式验收以全屏/无边框原生窗口为准，窗口化装饰裁剪留后续。
+  - **重要限制**：KDE 的窗口流是**按输出 scale 合成后的画面**。720p 全屏游戏在 4K/150% 输出上，`pipewire caps` 是 3840×2160，不是 720p；对它做 2× 会得到 8K 中间纹理（实测 VL 10–12fps、VRAM 7.6GB、GPU 100%），且没有真实超分收益。M2a 已加保护：源尺寸 >= 输出尺寸时自动改用 bilinear 1×，避免 8K；真正的低分辨率原生源需要 M2b 嵌套合成器或改用 XWayland 窗口捕获。
 - 自动化：构建 0 warning / 0 error；测试 101/101。
 
 未完成（M2a 剩余）：

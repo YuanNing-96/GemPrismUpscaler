@@ -184,7 +184,7 @@ done
 - 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
 - 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
 - 零拷贝只完成“导出 + Vulkan 导入”可行性，未做 fence 同步和真实游戏端到端验证，**不进入默认链路**。详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
-- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay；窗口化原生捕获含标题栏/阴影，窗口化原生输入由 M2b 嵌套解决；HDR/linear 在 M2c。
+- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；HDR/linear 在 M2c。
 - **M1c 不做动画**（留到 v1.0 前评估）；VL 是实验最高画质档，帧率不作为验收门槛。
 - **KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动**（DP 100% 正常）。这是 Avalonia/Wayland popup 的定位限制，M1 不处理，已记录在 [.doc/backlog.md](.doc/backlog.md) §7。
 - 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 上限 256 B（设备可能更低）。

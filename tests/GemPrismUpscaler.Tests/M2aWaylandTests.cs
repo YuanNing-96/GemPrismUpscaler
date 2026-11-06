@@ -1,5 +1,6 @@
 using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Geometry;
+using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Platform.Linux.Wayland;
 using NWayland.Protocols.Wayland;
 using Xunit;
@@ -103,6 +104,15 @@ public class M2aConfigTests
         Assert.Contains(warnings, w => w.Contains("capture.backend"));
         Assert.Contains(warnings, w => w.Contains("capture.mode"));
         Assert.Contains(warnings, w => w.Contains("input.pointer_mode"));
+    }
+
+    [Fact]
+    public void PortalSourceAlreadyOutputSize_Disables2x()
+    {
+        Assert.True(PortalUpscaleSession.SourceAlreadyAtOutputSize(3840, 2160, 3840, 2160));
+        Assert.True(PortalUpscaleSession.SourceAlreadyAtOutputSize(3840, 1600, 3840, 2160));
+        Assert.False(PortalUpscaleSession.SourceAlreadyAtOutputSize(1280, 720, 3840, 2160));
+        Assert.False(PortalUpscaleSession.SourceAlreadyAtOutputSize(1920, 1080, 3840, 2160));
     }
 
     [Fact]

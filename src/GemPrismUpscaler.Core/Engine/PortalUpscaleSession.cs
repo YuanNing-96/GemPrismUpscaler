@@ -18,6 +18,7 @@ public sealed class PortalUpscaleSession : IDisposable
 {
     private readonly ScalingMode _mode;
     private readonly EffectDefinition _effect;
+    private EffectDefinition _renderEffect;
     private readonly string? _monitorName;
     private readonly PortalSourceType _sourceType;
     private readonly Thread _thread;
@@ -37,7 +38,7 @@ public sealed class PortalUpscaleSession : IDisposable
     public RectI DestRect { get; private set; }
     public bool IsRunning => _thread.IsAlive;
     public string ExitReason => Volatile.Read(ref _exitReason);
-    public string EffectName => _effect.Id;
+    public string EffectName => _renderEffect.Id;
     public string OverlayDescription => _overlay is null
         ? "-"
         : $"wayland:{_overlay.OutputName}";
@@ -49,10 +50,22 @@ public sealed class PortalUpscaleSession : IDisposable
     {
         _mode = mode;
         _effect = effect;
+        _renderEffect = effect;
         _monitorName = monitorName;
         _sourceType = sourceType;
         _thread = new Thread(Run) { IsBackground = true, Name = "GemPrism-Portal" };
     }
+
+    /// <summary>
+    /// True when the portal stream already covers at least one output axis.
+    /// KDE composites window streams at the output scale, so a 720p fullscreen
+    /// game on a 4K output arrives as 4K; a 2x compute chain would only create
+    /// an 8K intermediate without adding real detail.
+    /// </summary>
+    public static bool SourceAlreadyAtOutputSize(int sourceWidth, int sourceHeight,
+        int outputWidth, int outputHeight)
+        => sourceWidth > 0 && sourceHeight > 0 && outputWidth > 0 && outputHeight > 0 &&
+           (sourceWidth >= outputWidth || sourceHeight >= outputHeight);
 
     public void Start()
     {
@@ -122,8 +135,22 @@ public sealed class PortalUpscaleSession : IDisposable
         int width = _capture.Width;
         int height = _capture.Height;
 
+        // KDE's portal window stream is already composited at the output
+        // scale. For a 720p fullscreen game on a 4K output the stream is 4K,
+        // so a 2x compute effect would allocate an 8K intermediate for zero
+        // real upscaling. Disable the 2x chain and explain why.
+        if (_effect.IsCompute && SourceAlreadyAtOutputSize(width, height,
+                _overlay.Width, _overlay.Height))
+        {
+            _renderEffect = EffectRegistry.BuiltIn(EffectMode.Bilinear);
+            Emit($"portal source {width}x{height} is already at output size " +
+                 $"{_overlay.Width}x{_overlay.Height}; disabling 2x effect " +
+                 $"(KWin composited the source; use XWayland window capture or M2b nested " +
+                 $"for a true low-resolution buffer)");
+        }
+
         _blitter = new VulkanBlitter(_overlay.VulkanDisplay, _overlay.VulkanSurface,
-            _overlay.Width, _overlay.Height, _effect);
+            _overlay.Width, _overlay.Height, _renderEffect);
         DestRect = LayoutCalculator.ComputeDestRect(width, height,
             _overlay.Width, _overlay.Height, _mode);
         _frame = new byte[_capture.Stride * height];

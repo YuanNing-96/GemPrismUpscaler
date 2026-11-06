@@ -65,7 +65,7 @@
 
 ## 4. 已知限制
 
-1. **原生 Wayland**：M2a 已实现 portal/PipeWire + layer-shell overlay；窗口化原生输入映射由 M2b 嵌套合成器解决；M2a 只做全屏输入穿透；窗口捕获含标题栏/阴影。
+1. **原生 Wayland**：M2a 已实现 portal/PipeWire + layer-shell overlay；窗口化原生输入映射由 M2b 嵌套合成器解决；M2a 只做全屏输入穿透；窗口捕获含标题栏/阴影；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（无真实超分收益），低分辨率原生源需 M2b 嵌套或 XWayland 捕获。
 2. **多显示器**：M1a 有基础版；M2a 增加 Wayland 输出枚举/热插拔/每屏缩放；跨屏连续拼接在 M2c（如需）。
 3. **FPS/raw input**：M2a 全屏源可输入穿透；窗口化原生 Wayland 由 M2b 嵌套合成器解决；纯 X11 会话的 raw input 在 M2c 评估。
 4. **HDR**：SDR 直通；HDR/linear 色彩在 M2c。
