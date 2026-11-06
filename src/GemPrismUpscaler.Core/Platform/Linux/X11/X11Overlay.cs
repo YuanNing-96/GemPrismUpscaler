@@ -1,6 +1,8 @@
+using GemPrismUpscaler.Core.Geometry;
+
 namespace GemPrismUpscaler.Core.Platform.Linux.X11;
 
-public sealed class X11Overlay : IDisposable
+public sealed class X11Overlay : IOverlay
 {
     private readonly X11Display _display;
     private bool _disposed;
@@ -11,6 +13,23 @@ public sealed class X11Overlay : IDisposable
     public int Width { get; }
     public int Height { get; }
     public bool IsVisible { get; private set; }
+
+    public double Scale => 1.0;
+    public string OutputName => string.Empty;
+    public bool IsWayland => false;
+    public IntPtr X11Window => (IntPtr)Window;
+    public IntPtr VulkanDisplay => IntPtr.Zero;
+    public IntPtr VulkanSurface => IntPtr.Zero;
+
+    public event Action<OverlayPointerEvent>? Pointer
+    {
+        add { }
+        remove { }
+    }
+
+    public void Pump(int timeoutMs) { }
+    public void SetInputRegion(RectI? physicalRect) { }
+    public void SetPointerForwarding(bool enabled) { }
 
     public X11Overlay(X11Display display, int x, int y, int width, int height)
     {

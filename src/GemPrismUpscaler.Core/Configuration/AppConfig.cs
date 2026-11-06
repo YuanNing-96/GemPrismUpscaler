@@ -15,6 +15,7 @@ public sealed class AppConfig
     public LoggingConfig Logging { get; set; } = new();
     public DisplayConfig Display { get; set; } = new();
     public EffectConfig Effect { get; set; } = new();
+    public CaptureConfig Capture { get; set; } = new();
     public TrayConfig Tray { get; set; } = new();
     public InputConfig Input { get; set; } = new();
     public DiagnosticsConfig Diagnostics { get; set; } = new();
@@ -44,6 +45,7 @@ public sealed class AppConfig
         Logging ??= new LoggingConfig();
         Display ??= new DisplayConfig();
         Effect ??= new EffectConfig();
+        Capture ??= new CaptureConfig();
         Tray ??= new TrayConfig();
         Input ??= new InputConfig();
         Diagnostics ??= new DiagnosticsConfig();
@@ -74,8 +76,15 @@ public sealed class AppConfig
         Effect.Scaling = NormalizeChoice(Effect.Scaling,
             "fit", "stretch", "fit", warnings, "effect.scaling");
 
+        Capture.Backend = NormalizeChoice(Capture.Backend,
+            new[] { "auto", "x11", "wayland" }, "auto", warnings, "capture.backend");
+        Capture.Mode = NormalizeChoice(Capture.Mode,
+            new[] { "auto", "x11", "portal" }, "auto", warnings, "capture.mode");
+
         Input.Mode = NormalizeChoice(Input.Mode,
             "2d", "fps", "2d", warnings, "input.mode");
+        Input.PointerMode = NormalizeChoice(Input.PointerMode,
+            new[] { "auto", "passthrough", "forward" }, "auto", warnings, "input.pointer_mode");
 
         if (Diagnostics.DeveloperMode)
             Logging.Level = "debug";
@@ -118,6 +127,16 @@ public sealed class AppConfig
     {
         string text = value?.Trim().ToLowerInvariant() ?? string.Empty;
         if (text == allowed1 || text == allowed2) return text;
+        if (text.Length == 0) return fallback;
+        warnings.Add($"{key}='{value}' 无效，已回退为 '{fallback}'");
+        return fallback;
+    }
+
+    private static string NormalizeChoice(string? value, string[] allowed,
+        string fallback, List<string> warnings, string key)
+    {
+        string text = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (Array.IndexOf(allowed, text) >= 0) return text;
         if (text.Length == 0) return fallback;
         warnings.Add($"{key}='{value}' 无效，已回退为 '{fallback}'");
         return fallback;
@@ -174,6 +193,14 @@ public sealed class EffectConfig
     public bool DirtyRect { get; set; } = true;
 }
 
+public sealed class CaptureConfig
+{
+    /// <summary>auto | x11 | wayland</summary>
+    public string Backend { get; set; } = "auto";
+    /// <summary>auto | x11 | portal</summary>
+    public string Mode { get; set; } = "auto";
+}
+
 public sealed class TrayConfig
 {
     public bool Enabled { get; set; } = true;
@@ -181,7 +208,10 @@ public sealed class TrayConfig
 
 public sealed class InputConfig
 {
+    /// <summary>2d | fps (M1c placeholder; M2 keeps for compatibility).</summary>
     public string Mode { get; set; } = "2d";
+    /// <summary>auto | passthrough | forward (Wayland pointer handling).</summary>
+    public string PointerMode { get; set; } = "auto";
 }
 
 public sealed class DiagnosticsConfig

@@ -1,6 +1,6 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.3.0 · 对应 M1c（设置 / 托盘 / Profile / 自定义 effect / VL；动画未做）
+版本 0.4.0 · 对应 M2a（Wayland 平台核心，开发中）；M2b 嵌套合成器 / M2c 色彩性能见 [m2-plan.md](m2-plan.md)。M1c（设置 / 托盘 / Profile / 自定义 effect / VL）已交付。
 
 ---
 
@@ -258,6 +258,8 @@ M0 已决定不做混合路径，直接采用全 Vulkan；**M1 仍不做混合�
 | Vulkan | Silk.NET.Vulkan | 需要 external memory 与 drm modifier，高层封装会挡路 |
 | OpenGL | Silk.NET.OpenGL（M0b 混合实验） | 混合管线需要；用 headless EGL 在 NVIDIA |
 | X11 | 自写 P/Invoke（libX11/libXext/libXdamage） | Silk.NET.X11 覆盖不全；M0 不需要原生 C++ |
+| Wayland | `NWayland` 0.11.0 + `NWayland.Protocols.Wlr` 0.11.0 | 与 Avalonia.Wayland 12.1.4 的 NWayland 版本对齐；Wlr 包提供 layer-shell/screencopy/virtual pointer |
+| 屏幕共享 | xdg-desktop-portal ScreenCast v6 + PipeWire | 原生 Wayland 无通用窗口枚举/捕获；M2a 用 memfd，M2c 做 DMA-BUF |
 | Shader | M0a 无 shader；M0b GLSL 离线编译为 SPIR-V | 运行时不依赖 glslang（用户自定义 shader 另议） |
 | 配置 | TOML | M1 接入；M0a 用 UI/CLI 参数 |
 | 原生辅助 | 无 | P/Invoke + Silk.NET 已够；去掉 CMake 依赖 |
@@ -451,6 +453,85 @@ M1c 按用户决定**不做动画**，留到 v1.0 前评估。设计意图仍是
 ### 6.8 零拷贝（M1b spike）
 
 DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。摘要：GPU 窗口（vkcube）可导出线性 1-fd DMA-BUF，并在 NVIDIA Vulkan 上 `vkBindImageMemory` 成功；软件窗口给出 2-fd/DCC，需要回退 XShm。未做 fence 同步和真实游戏端到端验证，**不进入 M1b 默认链路**。
+
+## 6.9 M2 平台扩展架构
+
+> M2 拆成 M2a（Wayland 平台核心）、M2b（嵌套合成器）、M2c（色彩/性能）。完整范围、决策与验收见 [m2-plan.md](m2-plan.md)。本节只记录架构。
+
+### 6.9.1 后端抽象与兼容策略
+
+M1c 的 `UpscaleSession` 直接 new X11 类，没有实际的 `CaptureBackend/PresentBackend/InputBackend`。M2a 引入**最小后端抽象**，但不重写稳定的 X11 路径：
+
+```text
+Engine / WaylandUpscaleSession
+  ├─ ICaptureSource      x11: XShmGetImage          wayland: portal + PipeWire
+  ├─ IPresentTarget      x11: override-redirect     wayland: layer-shell + Vulkan WSI
+  ├─ IInputRoute         x11: XSendEvent            wayland: wl_pointer + XSendEvent / passthrough
+  ├─ IOutputSet          x11: XRandR                wayland: wl_output + xdg_output
+  └─ IToplevelWatcher    x11: EWMH list             native: portal/stream + compositor protocols
+```
+
+- 共享组件：`LayoutCalculator`、`FrameDiff`、`FrameStats`、`OverlayVisibility`、`EffectRegistry`、`Anime4KChain`、`LanczosPresenter`。
+- X11 `UpscaleSession` 保持原样；Wayland 会话新增 peer implementation，降低回归风险。
+- `VulkanBlitter` 增加 Wayland surface 构造；上传/effect/Lanczos/呈现路径复用。
+
+### 6.9.2 Wayland 呈现
+
+- 每个输出一个 `zwlr_layer_shell_v1` surface：`layer=overlay`、四边 anchor、`exclusive_zone=-1`、`keyboard_interactivity=none`、`set_size(0,0)`。
+- 输入区域：
+  - XWayland 窗口化：内容矩形（接收后 `XSendEvent` 转发）。
+  - 原生全屏：空 region（输入穿透）。
+- 分数缩放：
+  - 绑定 `wp_fractional_scale_manager_v1`、`wp_viewporter`、`zxdg_output_v1`。
+  - layer-shell configure 的 width/height 是 surface-local（逻辑）尺寸；用 output logical/physical 尺寸计算 scale。
+  - buffer 用物理像素；`wp_viewport.set_destination(logicalW, logicalH)`；Vulkan swapchain extent = 物理尺寸。
+  - 150% HDMI：逻辑 2560×1440 → 物理 3840×2160；100% DP：1800×2880 → 同尺寸。
+- hide：`wl_surface.attach(null)` + commit，input region 置空；show：下一次 present 重新 attach，恢复时强制整帧。
+- 热插拔：`wl_registry.global/global_remove` 更新输出；当前输出消失时按名称回退/重新选屏，重建 overlay/swapchain。
+
+### 6.9.3 XWayland 混合
+
+- 捕获：保持 `X11Capture`（XShm）+ XDamage + 脏矩形。
+- 呈现：Wayland layer-shell overlay + Vulkan Wayland WSI。
+- 输入：overlay 接收 `wl_pointer`；逻辑坐标按 scale 转物理，走现有 `CoordinateMapper` → 源窗口坐标 → `XSendEvent`；键盘不转发，`keyboard_interactivity=none` 保持游戏焦点。
+- 生命周期/弹窗/焦点：继续用 X11 `X11WindowProbe`/`X11WindowEnumerator`/`OverlayVisibility`；源窗口仍是 X11，判断逻辑不变。
+- 该路径解决 overlay 输入/焦点问题，但**不解决 XShm 捕获撕裂**；撕裂最终方案在 M2c。
+
+### 6.9.4 原生 Wayland 捕获
+
+- Portal `ScreenCast` v6：`CreateSession` → `SelectSources`（window/monitor、`cursor_mode=hidden`、`persist_mode=2`、`restore_token`）→ `Start` → `OpenPipeWireRemote`。
+- `restore_token` 单次使用：每次 Start 后保存新 token；失效重新弹系统选择器。
+- PipeWire：产品路径 P/Invoke `libpipewire-0.3`（`pw_thread_loop` + `pw_stream`）；优先 `SPA_DATA_MemFd`，DMA-BUF 留 M2c；支持格式/尺寸变化、`spa_meta_region` damage、流错误。
+- 使用 `pipewire-serial` + `PW_KEY_TARGET_OBJECT` 定位流。
+- 源选择必须走 portal 系统选择器（Wayland 无通用窗口枚举）；`restore_token` 成功后尽量免打扰。
+- 输入：全屏源空 input region 穿透；窗口化原生源在 M2a 不做映射（M2b 嵌套解决）。
+
+### 6.9.5 多屏与坐标
+
+- Wayland：`wl_output`（mode/geometry/scale/transform/name）+ `zxdg_output_v1`（logical position/size/name）；输出热插拔。
+- XWayland 源：用 XRandR 物理矩形选屏，再按名称匹配 Wayland output（`HDMI-A-1`/`DP-1` 通常一致）。
+- 呈现用物理像素；layer-shell 输入/configure 用逻辑像素；两者通过 output scale 换算。
+- 输入映射：overlay 局部 → 内容矩形 → 源像素 → 注入；黑边不转发。
+- 原生 Wayland 源无法确定输出时：用户选屏/主屏；M2b 嵌套由 sway 私有输出解决。
+
+### 6.9.6 M2b 嵌套合成器（预览）
+
+- 私有 sway（headless 优先 / 隐藏嵌套窗口回退）作为源分辨率虚拟显示器；游戏运行在其中。
+- 主程序内 C# helper 使用 `NWayland.Protocols.Wlr`：`wlr-screencopy`/`wlr-export-dmabuf` 抓帧，`wlr-virtual-pointer` 注入；虚拟键盘待补。
+- 输入 1:1、真实光标不动、raw input/指针锁定可用；不改源窗口状态（不做 promote）。
+- 窗口识别：Profile / token + PID / sway IPC / transient+window type；歧义手动选择；对话框不改输出尺寸。
+- 任意分辨率/宽高比：嵌套输出 = 主窗口客户区尺寸；4:3 由现有 fit/stretch 处理。
+- 启动器/Lutris：`--nested`、`--nested-session` + wrapper；Lutris per-game env/wrapper；Steam/Heroic best-effort。
+- 详细见 [m2-plan.md](m2-plan.md) §6。
+
+### 6.9.7 M2c 色彩/性能（预览）
+
+- HDR/linear：`wp_color_manager_v1` + 10-bit swapchain；tone map/直通。
+- DMA-BUF 零拷贝：PipeWire/嵌套抓帧导入 + `wp_linux_drm_syncobj`/Vulkan external semaphore；失败回退 memfd/shm。
+- 混合 GL+Vulkan 复核；无 GL 独占需求则明确 no-go。
+- 跨屏拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案。
+
+---
 
 ## 7. 性能预算
 

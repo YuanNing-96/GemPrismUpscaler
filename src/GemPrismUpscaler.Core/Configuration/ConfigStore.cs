@@ -45,8 +45,9 @@ public static class ConfigStore
         ["logging"] = new(StringComparer.Ordinal) { "path", "level" },
         ["display"] = new(StringComparer.Ordinal) { "monitor" },
         ["effect"] = new(StringComparer.Ordinal) { "default", "scaling", "dirty_rect" },
+        ["capture"] = new(StringComparer.Ordinal) { "backend", "mode" },
         ["tray"] = new(StringComparer.Ordinal) { "enabled" },
-        ["input"] = new(StringComparer.Ordinal) { "mode" },
+        ["input"] = new(StringComparer.Ordinal) { "mode", "pointer_mode" },
         ["diagnostics"] = new(StringComparer.Ordinal) { "developer_mode" },
         ["last"] = new(StringComparer.Ordinal) { "effect", "scaling", "monitor" },
         ["profile"] = new(StringComparer.Ordinal)

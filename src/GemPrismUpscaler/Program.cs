@@ -219,8 +219,19 @@ sealed class Program
                     hotkey = HotkeyBinding.Default;
                 }
 
+                var overlayBackend = ResolveOverlayBackend(args);
+                var pointerPassthrough = ResolvePointerPassthrough(args);
+                string captureMode = GetOption(args, "--capture") ?? Config.Capture.Mode;
+                if (captureMode is not ("auto" or "x11" or "portal"))
+                {
+                    Console.Error.WriteLine($"invalid --capture '{captureMode}'; expected auto|x11|portal");
+                    return 2;
+                }
+                if (captureMode == "portal")
+                    Console.Error.WriteLine("portal capture is not available in this build yet; using X11 capture");
+
                 session = new UpscaleSession(info, mode, effect.Mode, monitorName, outputWidth, outputHeight,
-                    hotkey, effect)
+                    hotkey, effect, overlayBackend, pointerPassthrough)
                 {
                     FollowFocus = !args.Any(a => a == "--no-follow-focus") && Config.General.FollowFocus,
                     DirtyRectEnabled = !args.Any(a => a == "--no-dirty-rect") && Config.Effect.DirtyRect
@@ -241,7 +252,8 @@ sealed class Program
                 try
                 {
                     session.Start();
-                    Console.WriteLine($"running; overlay=0x{session.OverlayWindowId:x}; monitor={session.MonitorName}; Ctrl+C to stop");
+                    Console.WriteLine($"running; backend={(overlayBackend == OverlayBackend.Wayland ? "wayland" : "x11")}; " +
+                                      $"overlay={session.OverlayDescription}; monitor={session.MonitorName}; Ctrl+C to stop");
                     while (session.IsRunning) Thread.Sleep(200);
                     Console.WriteLine($"stopped: {session.ExitReason}");
                 }
@@ -258,6 +270,36 @@ sealed class Program
             Console.Error.WriteLine(ex);
             return 1;
         }
+    }
+
+    private static OverlayBackend ResolveOverlayBackend(string[] args)
+    {
+        string requested = GetOption(args, "--backend") ?? Config.Capture.Backend;
+        bool waylandSession = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+        bool x11 = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DISPLAY"));
+
+        if (requested is not ("auto" or "x11" or "wayland"))
+        {
+            Console.Error.WriteLine($"invalid --backend '{requested}'; expected auto|x11|wayland");
+            return OverlayBackend.X11;
+        }
+        if (requested == "wayland")
+            return OverlayBackend.Wayland;
+        if (requested == "x11")
+            return OverlayBackend.X11;
+        return waylandSession && x11 ? OverlayBackend.Wayland : OverlayBackend.X11;
+    }
+
+    private static bool ResolvePointerPassthrough(string[] args)
+    {
+        string mode = GetOption(args, "--input") ?? Config.Input.PointerMode;
+        return mode switch
+        {
+            "passthrough" => true,
+            "forward" => false,
+            "auto" => false,
+            _ => false
+        };
     }
 
     private static void PrintUsage()
@@ -282,6 +324,12 @@ sealed class Program
               --no-follow-focus         keep the overlay when the game loses focus
               --no-dirty-rect           disable dirty-tile rendering (A/B baseline)
               --output-size <WxH>       debug/benchmark output override (e.g. 3840x2160)
+              --backend auto|x11|wayland
+                                        presentation backend (auto by session)
+              --capture auto|x11|portal
+                                        capture backend (portal is native Wayland, M2a)
+              --input auto|passthrough|forward
+                                        Wayland pointer handling (forward = XSendEvent)
             """);
     }
 

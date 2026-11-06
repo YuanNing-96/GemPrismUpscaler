@@ -2,6 +2,8 @@ using System.Diagnostics;
 using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
+using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Wayland;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
 
@@ -29,11 +31,13 @@ public sealed class UpscaleSession : IDisposable
     private readonly ScalingMode _mode;
     private readonly EffectDefinition _effect;
     private readonly HotkeyBinding _hotkeyBinding;
+    private readonly OverlayBackend _overlayBackend;
+    private readonly bool _pointerPassthrough;
     private readonly ManualResetEventSlim _started = new(false);
     private readonly OverlayVisibility _visibility = new();
     private Thread? _thread;
     private X11Display? _display;
-    private X11Overlay? _overlay;
+    private IOverlay? _overlay;
     private X11Capture? _capture;
     private X11Damage? _damage;
     private X11Input? _input;
@@ -61,7 +65,14 @@ public sealed class UpscaleSession : IDisposable
     public event Action<string>? Message;
 
     public RectI DestRect { get; private set; }
-    public ulong OverlayWindowId => _overlay?.Window ?? 0;
+    public ulong OverlayWindowId => (ulong)(_overlay?.X11Window ?? IntPtr.Zero);
+
+    public string OverlayDescription => _overlay switch
+    {
+        null => "-",
+        { IsWayland: true } => $"wayland:{_overlay.OutputName}",
+        _ => $"0x{(ulong)_overlay.X11Window:x}"
+    };
     public bool IsRunning => _thread is { IsAlive: true };
     public bool IsOverlayVisible => _overlay?.IsVisible == true;
     public string OverlayTitle => "GemPrismOverlay";
@@ -82,7 +93,9 @@ public sealed class UpscaleSession : IDisposable
     public UpscaleSession(WindowInfo source, ScalingMode mode = ScalingMode.Fit,
         EffectMode effect = EffectMode.Anime4KS, string? monitorName = null,
         int outputWidthOverride = 0, int outputHeightOverride = 0,
-        HotkeyBinding? hotkey = null, EffectDefinition? effectDefinition = null)
+        HotkeyBinding? hotkey = null, EffectDefinition? effectDefinition = null,
+        OverlayBackend overlayBackend = OverlayBackend.X11,
+        bool pointerPassthrough = false)
     {
         _source = source;
         _mode = mode;
@@ -91,6 +104,8 @@ public sealed class UpscaleSession : IDisposable
         _outputWidthOverride = outputWidthOverride;
         _outputHeightOverride = outputHeightOverride;
         _hotkeyBinding = hotkey ?? HotkeyBinding.Default;
+        _overlayBackend = overlayBackend;
+        _pointerPassthrough = pointerPassthrough;
     }
 
     public void Start()
@@ -171,18 +186,20 @@ public sealed class UpscaleSession : IDisposable
             }
         }
 
+        _overlay = CreateOverlay(_display, _monitor.Value, forwardPointer: !_pointerPassthrough);
+        if (_overlay is null) throw new InvalidOperationException("no usable presentation overlay");
         DestRect = LayoutCalculator.ComputeDestRect(geometry.Value.Width, geometry.Value.Height,
-            _monitor.Value.Width, _monitor.Value.Height, _mode);
+            _overlay.Width, _overlay.Height, _mode);
 
-        _overlay = new X11Overlay(_display, _monitor.Value.X, _monitor.Value.Y,
-            _monitor.Value.Width, _monitor.Value.Height);
         _capture = new X11Capture(_display, _source.WindowId, geometry.Value.Width, geometry.Value.Height);
         _damage = new X11Damage(_display, _source.WindowId);
         _input = new X11Input(_display, _source.WindowId);
         _hotkey = new X11Hotkey(_display, _hotkeyBinding);
         if (!_hotkey.IsGrabbed)
             ErrorBus.Functional("hotkey", _hotkey.Error ?? $"热键 {_hotkeyBinding} 未能注册");
-        _blitter = new VulkanBlitter(_display, _overlay.Window, _monitor.Value.Width, _monitor.Value.Height, _effect);
+        _blitter = CreateBlitter(_display, _overlay, _effect);
+        _overlay.Pointer += OnOverlayPointer;
+        _overlay.SetInputRegion(CurrentInputRegion());
 
         // Starting the upscaler from the config UI leaves focus on our window.
         // Give it back to the game so keyboard/hover/activation work immediately.
@@ -201,7 +218,8 @@ public sealed class UpscaleSession : IDisposable
              $"monitor={_monitor.Value} dest={DestRect} " +
              $"device='{_blitter.DeviceName}' format={_blitter.SwapchainFormatName} " +
              $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height} " +
-             $"damage={_damage.Available} hotkey={_hotkey.IsGrabbed} focus={_focusedOnce} overlay=0x{_overlay.Window:x}");
+             $"damage={_damage.Available} hotkey={_hotkey.IsGrabbed} focus={_focusedOnce} " +
+             $"overlay={( _overlay.IsWayland ? $"wayland:{_overlay.OutputName}" : $"0x{(ulong)_overlay.X11Window:x}")}");
     }
 
     /// <summary>
@@ -227,6 +245,73 @@ public sealed class UpscaleSession : IDisposable
         return new RectI(x, y, (int)width, (int)height);
     }
 
+    private IOverlay? CreateOverlay(X11Display display, MonitorInfo monitor, bool forwardPointer)
+    {
+        if (_overlayBackend == OverlayBackend.Wayland &&
+            _outputWidthOverride <= 0 && _outputHeightOverride <= 0)
+        {
+            var wayland = WaylandOverlay.TryCreate(monitor.Name, forwardPointer);
+            if (wayland is not null) return wayland;
+            Emit("wayland overlay unavailable; falling back to X11 overlay");
+        }
+
+        return new X11Overlay(display, monitor.X, monitor.Y, monitor.Width, monitor.Height);
+    }
+
+    private static VulkanBlitter CreateBlitter(X11Display display, IOverlay overlay, EffectDefinition effect)
+    {
+        if (overlay.IsWayland)
+            return new VulkanBlitter(overlay.VulkanDisplay, overlay.VulkanSurface,
+                overlay.Width, overlay.Height, effect);
+        return new VulkanBlitter(display, (ulong)overlay.X11Window,
+            overlay.Width, overlay.Height, effect);
+    }
+
+    private RectI? CurrentInputRegion()
+    {
+        if (_overlay?.IsWayland != true) return null;
+        if (_pointerPassthrough) return null;
+        return DestRect;
+    }
+
+    private void OnOverlayPointer(OverlayPointerEvent e)
+    {
+        if (_display is null || _input is null || _overlay is null) return;
+        Log.Debug($"wayland pointer {e.Kind} {e.X},{e.Y} button={e.Button}");
+        var mapper = Mapper;
+        switch (e.Kind)
+        {
+            case OverlayPointerKind.Motion:
+            case OverlayPointerKind.Enter:
+                _input.ForwardMotion(e.X, e.Y, mapper);
+                break;
+            case OverlayPointerKind.Leave:
+                _input.Reset();
+                break;
+            case OverlayPointerKind.WheelUp:
+                _input.ForwardWheel(e.X, e.Y, mapper, true);
+                break;
+            case OverlayPointerKind.WheelDown:
+                _input.ForwardWheel(e.X, e.Y, mapper, false);
+                break;
+            case OverlayPointerKind.ButtonPress:
+                if (!X11WindowProbe.IsFocused(_display, _source.WindowId))
+                {
+                    FocusSource();
+                    _visibility.FocusLost = false;
+                    _focusedOnce = true;
+                    _focusLostAt = 0;
+                }
+                if (e.Button > 0)
+                    _input.ForwardButton(e.X, e.Y, mapper, (uint)e.Button, true);
+                break;
+            case OverlayPointerKind.ButtonRelease:
+                if (e.Button > 0)
+                    _input.ForwardButton(e.X, e.Y, mapper, (uint)e.Button, false);
+                break;
+        }
+    }
+
     private void Loop()
     {
         bool dirty = true;
@@ -237,6 +322,27 @@ public sealed class UpscaleSession : IDisposable
 
         while (!_stop)
         {
+            _overlay?.Pump(0);
+
+            if (_overlay is WaylandOverlay { SelectedOutputMissing: true })
+            {
+                var current = _monitor;
+                var alternative = current is null
+                    ? _monitors.FirstOrDefault()
+                    : _monitors.FirstOrDefault(m => !string.Equals(m.Name, current.Value.Name,
+                        StringComparison.OrdinalIgnoreCase));
+                if (alternative.Name is not null)
+                {
+                    Emit($"wayland output lost; moving overlay to {alternative.Name}");
+                    RebuildOutput(alternative);
+                }
+                else
+                {
+                    SetExitReason("wayland output removed");
+                    break;
+                }
+            }
+
             ApplyPendingVisibilityRequests(ref dirty);
             ProcessEvents(ref dirty);
 
@@ -288,7 +394,8 @@ public sealed class UpscaleSession : IDisposable
                 {
                     _capture.Recreate(geom.Value.Width, geom.Value.Height);
                     DestRect = LayoutCalculator.ComputeDestRect(geom.Value.Width, geom.Value.Height,
-                        _monitor?.Width ?? _screenWidth, _monitor?.Height ?? _screenHeight, _mode);
+                        _overlay?.Width ?? _screenWidth, _overlay?.Height ?? _screenHeight, _mode);
+                    _overlay?.SetInputRegion(CurrentInputRegion());
                     _diff.Reset();
                     Emit($"source resized to {geom.Value.Width}x{geom.Value.Height} dest={DestRect}");
                 }
@@ -352,7 +459,7 @@ public sealed class UpscaleSession : IDisposable
             var report = stats.Tick();
             if (report is not null)
             {
-                Emit($"stats {report.ToLogString()} hidden={_overlay.IsVisible == false} " +
+                Emit($"stats {report.ToLogString()} hidden={_overlay?.IsVisible == false} " +
                      $"popup={_visibility.PopupHidden} userHidden={_visibility.UserHidden}");
                 StatsCsv.TryWrite(report);
             }
@@ -422,7 +529,8 @@ public sealed class UpscaleSession : IDisposable
             }
 
             if (_overlay is null || _input is null) continue;
-            if (ev.Window != _overlay.Window) continue;
+            if (_overlay.X11Window == IntPtr.Zero) continue;
+            if (ev.Window != (ulong)_overlay.X11Window) continue;
 
             switch (ev.Type)
             {
@@ -493,7 +601,8 @@ public sealed class UpscaleSession : IDisposable
             // Focus on our own overlay (e.g. after a click) is not a "switch to
             // another app" and must not make the overlay hide itself.
             bool focused = X11WindowProbe.IsFocused(_display, _source.WindowId) ||
-                           (_overlay is not null && X11WindowProbe.IsFocused(_display, _overlay.Window));
+                           (_overlay is { IsWayland: false, X11Window: var x11 } &&
+                            X11WindowProbe.IsFocused(_display, (ulong)x11));
             long focusNow = Environment.TickCount64;
             if (focused)
             {
@@ -589,17 +698,20 @@ public sealed class UpscaleSession : IDisposable
         _overlay = null;
 
         _monitor = monitor;
-        _overlay = new X11Overlay(_display, monitor.X, monitor.Y, monitor.Width, monitor.Height);
-        _blitter = new VulkanBlitter(_display, _overlay.Window, monitor.Width, monitor.Height, _effect);
+        _overlay = CreateOverlay(_display, monitor, forwardPointer: !_pointerPassthrough);
+        if (_overlay is null) throw new InvalidOperationException("no usable presentation overlay");
+        _overlay.Pointer += OnOverlayPointer;
+        _blitter = CreateBlitter(_display, _overlay, _effect);
         DestRect = LayoutCalculator.ComputeDestRect(_capture.Width, _capture.Height,
-            monitor.Width, monitor.Height, _mode);
+            _overlay.Width, _overlay.Height, _mode);
+        _overlay.SetInputRegion(CurrentInputRegion());
 
         _input?.Reset();
         _diff.Reset();
         _forceRedraw = true;
         ApplyVisibility();
         if (_overlay.IsVisible) SyncPointerToSource();
-        Emit($"output size {monitor.Width}x{monitor.Height} dest={DestRect} " +
+        Emit($"output size {_overlay.Width}x{_overlay.Height} dest={DestRect} " +
              $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height}");
     }
 
@@ -649,12 +761,15 @@ public sealed class UpscaleSession : IDisposable
             _forceRedraw = true;
             _diff.Reset();
             _overlay.Show();
+            _overlay.SetPointerForwarding(!_pointerPassthrough);
+            _overlay.SetInputRegion(CurrentInputRegion());
             SyncPointerToSource();
             Emit("overlay shown");
         }
         else
         {
             _overlay.Hide();
+            _overlay.SetInputRegion(null);
             _input?.Reset();
             Emit($"overlay hidden ({_visibility.ReasonText})");
         }
@@ -667,6 +782,7 @@ public sealed class UpscaleSession : IDisposable
     private void SyncPointerToSource()
     {
         if (_display is null || _input is null) return;
+        if (_overlay?.IsWayland == true) return;
         if (X11Native.XQueryPointer(_display.Handle, _display.Root, out _, out _,
                 out int rootX, out int rootY, out _, out _, out _) == 0)
             return;

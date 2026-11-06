@@ -49,13 +49,14 @@ M1c 已实现完整的设置/配置界面；下表保留为需求对照。
 
 ## 4. M2 及以后
 
-- 原生 Wayland 捕获（portal + PipeWire + DMA-BUF）与 layer-shell 呈现。
-- 完整多显示器：热插拔、每屏 DPI、负坐标、跨屏拼接。
-- HDR/linear 色彩管理。
-- 混合 GL+Vulkan effect 管线（当前全 Vulkan；没有 GL 独占能力，暂不需要）。
-- FPS/鼠标视角/raw input：uinput / libei / 合成器方案；需要处理 `/dev/uinput` 权限、反作弊、相对移动和 pointer lock。
-- 进入/退出动画（M1c 未做，留 v1.0 前评估）。
-- 自定义 effect 的自定义 graphics 最终 pass（当前只支持 compute + 内置 Lanczos-2）。
+M2 已拆成 M2a / M2b / M2c，详细计划见 [m2-plan.md](m2-plan.md)。
+
+- **M2a（0.4.0，开发中）**：Wayland layer-shell 呈现、XWayland 混合、原生 Wayland portal/PipeWire 捕获（全屏输入穿透）、多屏/分数缩放/热插拔、GlobalShortcuts、CLI 文档。
+- **M2b（0.5.0，计划）**：嵌套合成器（sway + helper）解决窗口化原生 Wayland 输入；任意分辨率/4:3；弹窗/启动器/Lutris；无光标跳变；raw input/指针锁定。
+- **M2c（0.6.0，计划）**：HDR/linear 色彩；PipeWire/嵌套 DMA-BUF 零拷贝；混合 GL+Vulkan 复核；跨屏连续拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案。
+- **动画**：M1c 未做，留 v1.0 前评估。
+- **自定义 effect 的 graphics 最终 pass**：当前只支持 compute + 内置 Lanczos-2；留后续。
+- **4K 源（2×→8K）**：脏矩形/显存/带宽仍需专门评估。
 
 ## 5. 需要更多需求才做
 
@@ -76,7 +77,7 @@ M1c 已实现完整的设置/配置界面；下表保留为需求对照。
 
 ## 7. M1 阶段记录、留待后续处理
 
-- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决，M2 处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、present wait 实验、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证，正式修复需要 M2 的 DMA-BUF/零拷贝或 PipeWire/portal 合成捕获。临时规避：源程序开启 VSync/垂直同步。
+- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决，M2c 最终处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、present wait 实验、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证。M2a 的 XWayland 混合仍用 XShm；M2c 用 portal 合成帧或 DRI3+fence 做最终方案。临时规避：源程序开启 VSync/垂直同步。
 
 - **KDE Wayland + 4K/150% 缩放下 ComboBox 下拉列表不跟随窗口移动**：在 HDMI 4K（150%）上打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 屏正常。判断为 Avalonia 12.1.4 在 Wayland 下 popup 定位/缩放的限制，不是本项目的布局问题。M1 不处理；已尝试“窗口移动时自动收起”，但在 Wayland 下收不到可靠的窗口位置变化，效果不成立，已回退。留到 M2 或 Avalonia 升级后复测。
 - **热键改为“实际按一遍”录入**：M1c 设置页目前是文本框输入字符串；后续改成捕获用户真实按键/修饰键，实时显示并校验，避免手写格式错误。M1 暂不修改。

@@ -642,7 +642,20 @@ public partial class MainWindow : Window
             hotkey = HotkeyBinding.Default;
         _sessionHotkey = hotkey.ToString();
 
-        var session = new UpscaleSession(info, mode, effect.Mode, monitorName, 0, 0, hotkey, effect)
+        var backend = _config.Capture.Backend switch
+        {
+            "wayland" => OverlayBackend.Wayland,
+            "x11" => OverlayBackend.X11,
+            _ => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")) &&
+                 !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DISPLAY"))
+                ? OverlayBackend.Wayland
+                : OverlayBackend.X11
+        };
+        bool pointerPassthrough = string.Equals(_config.Input.PointerMode, "passthrough",
+            StringComparison.OrdinalIgnoreCase);
+
+        var session = new UpscaleSession(info, mode, effect.Mode, monitorName, 0, 0, hotkey, effect,
+            backend, pointerPassthrough)
         {
             FollowFocus = FollowFocusCheck.IsChecked != false,
             DirtyRectEnabled = _activeProfile?.DirtyRect ?? _config.Effect.DirtyRect

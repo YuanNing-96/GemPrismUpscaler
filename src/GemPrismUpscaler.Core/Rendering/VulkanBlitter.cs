@@ -20,8 +20,11 @@ namespace GemPrismUpscaler.Core.Rendering;
 /// </summary>
 public sealed unsafe class VulkanBlitter : IDisposable
 {
-    private readonly X11Display _display;
+    private readonly X11Display? _display;
     private readonly ulong _window;
+    private readonly IntPtr _wlDisplay;
+    private readonly IntPtr _wlSurface;
+    private readonly bool _isWayland;
     private readonly int _outputWidth;
     private readonly int _outputHeight;
     private readonly EffectDefinition _effect;
@@ -30,7 +33,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private Vk _vk = null!;
     private Instance _instance;
     private KhrSurface _surfaceExt = null!;
-    private KhrXlibSurface _xlibExt = null!;
+    private KhrXlibSurface? _xlibExt;
+    private KhrWaylandSurface? _waylandExt;
     private KhrSwapchain _swapchainExt = null!;
     private SurfaceKHR _surface;
     private PhysicalDevice _physicalDevice;
@@ -93,9 +97,24 @@ public sealed unsafe class VulkanBlitter : IDisposable
 
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
         EffectDefinition? effect = null)
+        : this(display, window, IntPtr.Zero, IntPtr.Zero, outputWidth, outputHeight, effect)
+    {
+    }
+
+    public VulkanBlitter(IntPtr wlDisplay, IntPtr wlSurface, int outputWidth, int outputHeight,
+        EffectDefinition? effect = null)
+        : this(null, 0, wlDisplay, wlSurface, outputWidth, outputHeight, effect)
+    {
+    }
+
+    private VulkanBlitter(X11Display? display, ulong window, IntPtr wlDisplay, IntPtr wlSurface,
+        int outputWidth, int outputHeight, EffectDefinition? effect)
     {
         _display = display;
         _window = window;
+        _wlDisplay = wlDisplay;
+        _wlSurface = wlSurface;
+        _isWayland = wlDisplay != IntPtr.Zero && wlSurface != IntPtr.Zero;
         _outputWidth = outputWidth;
         _outputHeight = outputHeight;
         _effect = effect ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
@@ -133,7 +152,9 @@ public sealed unsafe class VulkanBlitter : IDisposable
                 ApiVersion = Vk.MakeVersion(1, 2, 0)
             };
 
-            var extensions = new[] { "VK_KHR_surface", "VK_KHR_xlib_surface" };
+            var extensions = _isWayland
+                ? new[] { "VK_KHR_surface", "VK_KHR_wayland_surface" }
+                : new[] { "VK_KHR_surface", "VK_KHR_xlib_surface" };
             var extPtrs = extensions.Select(Marshal.StringToHGlobalAnsi).ToArray();
             bool enableValidation = DiagnosticsRuntime.ValidationLayerEnabled;
             var layers = enableValidation ? new[] { "VK_LAYER_KHRONOS_validation" } : Array.Empty<string>();
@@ -178,20 +199,43 @@ public sealed unsafe class VulkanBlitter : IDisposable
 
         if (!_vk.TryGetInstanceExtension(_instance, out _surfaceExt, null))
             throw new InvalidOperationException("VK_KHR_surface unavailable");
-        if (!_vk.TryGetInstanceExtension(_instance, out _xlibExt, null))
-            throw new InvalidOperationException("VK_KHR_xlib_surface unavailable");
+        if (_isWayland)
+        {
+            if (!_vk.TryGetInstanceExtension(_instance, out _waylandExt, null))
+                throw new InvalidOperationException("VK_KHR_wayland_surface unavailable");
+        }
+        else
+        {
+            if (!_vk.TryGetInstanceExtension(_instance, out _xlibExt, null))
+                throw new InvalidOperationException("VK_KHR_xlib_surface unavailable");
+        }
     }
 
     private void CreateSurface()
     {
-        var ci = new XlibSurfaceCreateInfoKHR
+        Result r;
+        if (_isWayland)
         {
-            SType = StructureType.XlibSurfaceCreateInfoKhr,
-            Dpy = (IntPtr*)_display.Handle,
-            Window = (IntPtr)_window
-        };
-        Result r = _xlibExt.CreateXlibSurface(_instance, &ci, null, out _surface);
-        if (r != Result.Success) throw new InvalidOperationException($"vkCreateXlibSurfaceKHR failed: {r}");
+            var ci = new WaylandSurfaceCreateInfoKHR
+            {
+                SType = StructureType.WaylandSurfaceCreateInfoKhr,
+                Display = (IntPtr*)_wlDisplay,
+                Surface = (IntPtr*)_wlSurface
+            };
+            r = _waylandExt!.CreateWaylandSurface(_instance, &ci, null, out _surface);
+            if (r != Result.Success) throw new InvalidOperationException($"vkCreateWaylandSurfaceKHR failed: {r}");
+        }
+        else
+        {
+            var ci = new XlibSurfaceCreateInfoKHR
+            {
+                SType = StructureType.XlibSurfaceCreateInfoKhr,
+                Dpy = (IntPtr*)_display!.Handle,
+                Window = (IntPtr)_window
+            };
+            r = _xlibExt!.CreateXlibSurface(_instance, &ci, null, out _surface);
+            if (r != Result.Success) throw new InvalidOperationException($"vkCreateXlibSurfaceKHR failed: {r}");
+        }
     }
 
     private void PickDevice()
@@ -322,7 +366,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Log.Info("swapchain present mode=PresentModeFifoKhr");
 
         Extent2D extent = caps.CurrentExtent;
-        if (extent.Width == uint.MaxValue)
+        if (_isWayland || extent.Width == uint.MaxValue || extent.Width == 0 || extent.Height == 0)
             extent = new Extent2D((uint)_outputWidth, (uint)_outputHeight);
         _swapchainExtent = extent;
 

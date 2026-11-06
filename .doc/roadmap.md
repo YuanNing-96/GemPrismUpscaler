@@ -95,27 +95,66 @@ X11/XWayland 游戏窗口
 
 ## M2 · 平台扩展
 
+M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性能**。完整范围、决策、实现与验收见 [m2-plan.md](m2-plan.md)。
+
+### M2a · Wayland 平台核心（v0.4.0，核心已实现；portal/热键待补）
+
 | 模块 | 内容 |
 |---|---|
-| Wayland 捕获 | xdg-desktop-portal + PipeWire + DMA-BUF，支持 `restore_token` 持久授权 |
-| Wayland 呈现 | wlr-layer-shell overlay + 空 input region + `keyboard_interactivity=none` |
-| 多显示器完整版 | 热插拔、每屏 DPI、负坐标、跨屏拼接 |
-| 色彩管理 | linear 工作空间，可选 HDR 直通 |
-| 混合管线 | 重新评估 GL+Vulkan 分 pass 执行 |
-| 输入 | FPS/鼠标视角/raw input 的完整方案（uinput / libei 等） |
+| 后端抽象 | 最小 `ICaptureSource` / `IPresentTarget` / `IInputRoute` / `IOutputSet`；X11 保持原路径 |
+| Wayland 呈现 | `zwlr_layer_shell_v1` overlay、Vulkan Wayland WSI、分数缩放、每屏 swapchain、热插拔 |
+| XWayland 混合 | X11 捕获 + Wayland overlay + `wl_pointer` → `XSendEvent` 转发；保持 `--window` 体验 |
+| 原生 Wayland 捕获 | portal `ScreenCast` v6 + PipeWire（memfd 优先）+ `restore_token`；全屏源输入穿透 |
+| 多显示器 | Wayland 输出枚举/热插拔；4K/150% + 竖屏/100%；XWayland 按 XRandR 名称匹配 |
+| 热键 | portal `GlobalShortcuts` v2；失败时明确提示并回退 `XGrabKey` best-effort |
+| CLI/文档 | `--backend`、`--capture`、`--input`、`--portal-window`；`.doc/cli.md` |
+
+**当前状态**：Wayland layer-shell overlay + Vulkan WSI、XWayland 混合、输入转发、多屏/分数缩放已实现并冒烟；portal/PipeWire 原生捕获与 GlobalShortcuts 尚未实现（`--capture portal` 目前回退 X11 并提示）。详见 `.agent/M2a-开发记录.md`。
 
 **验收标准**：
 
-1. KDE 与 wlroots 系合成器下，原生 Wayland 窗口可捕获并超分。
-2. Wayland 下输入完全透明，无光标跳变。
-3. 多显示器热插拔与不同 DPI 下覆盖窗口位置正确。
-4. FPS/raw input 方案有明确支持范围，不静默失效。
+1. KDE Wayland 下 XWayland 视觉小说窗口化：overlay/输入/弹窗/焦点/最小化/关闭不回归。
+2. 原生 Wayland 全屏窗口（vkcube/mpv）经 portal/PipeWire 捕获、超分、呈现；输入穿透不抢焦点。
+3. 4K/150% + 1800×2880/100% 双屏位置/比例/输入正确；输出热插拔 1 秒内跟随。
+4. 静止画面不重复 capture/present；构建 0 warning / 0 error；91/91 + 新增测试。
+5. 纯 X11 会话主要路径冒烟不回归。
+6. 窗口化原生 Wayland 输入不在 M2a 解决（M2b 嵌套）。
 
-### 已知限制
+### M2b · 嵌套合成器（v0.5.0，计划）
 
-- GNOME（Mutter）不支持 `zwlr_layer_shell_v1`，需要单独方案。
-- portal 首次授权需要用户交互，之后靠 token 免打扰。
-- X11 下窗口 pixmap 到 DMA-BUF 的零拷贝没有通用标准路径，可能只能在 Wayland 后端实现。
+| 模块 | 内容 |
+|---|---|
+| 私有虚拟显示器 | sway headless 优先 / 隐藏嵌套窗口回退；输出 = 主窗口客户区尺寸（含 4:3） |
+| 捕获 | 主程序内 C# helper：`wlr-screencopy` / `wlr-export-dmabuf`；Unix socket/共享内存 |
+| 输入 | `wlr-virtual-pointer` 绝对/相对；虚拟键盘转发；指针锁定/raw input |
+| 窗口识别 | Profile / token + PID/进程树 / sway IPC / transient+window type；歧义手动选择 |
+| 弹窗/启动器 | 嵌套内对话框浮动；启动器 → 游戏切换；`--nested` / `--nested-session` |
+| Lutris | per-game 环境变量/wrapper；Steam/Heroic 文档化 best-effort |
+
+**验收标准**：
+
+1. 1280×720（16:9）、1024×768（4:3）、1920×1080 在嵌套模式下捕获/超分/输入正确。
+2. 无光标跳变；指针/键盘/滚轮/拖拽/指针锁定正确。
+3. 启动器 → 游戏、对话框、关闭/退出正常；Lutris 实机通过。
+4. sway 缺失/helper 崩溃有明确错误与清理。
+
+### M2c · 色彩、性能与扩展（v0.6.0，计划）
+
+| 模块 | 内容 |
+|---|---|
+| 色彩 | HDR/linear、tone map/直通；`wp_color_manager_v1` |
+| 零拷贝 | PipeWire/嵌套 DMA-BUF 导入 + 显式同步；失败回退 memfd/shm |
+| 混合管线 | GL+Vulkan 复核；无 GL 独占需求则明确 no-go |
+| 多屏拼接 | 跨屏连续拼接（如需） |
+| 输入/撕裂 | 非嵌套 X11 raw input；XWayland 撕裂最终方案（portal / DRI3+fence） |
+
+### M2 已知限制
+
+- GNOME（Mutter）不支持 `zwlr_layer_shell_v1`，M2 不做完整支持。
+- portal 首次授权需要用户交互；`restore_token` 单次使用，需保存新 token。
+- 嵌套模式必须由 GemPrism/启动器把游戏启动到嵌套 session，不能接管已运行窗口。
+- KDE 优先；wlroots 真实桌面验收推后，可能不在 1.0 前完整验证。
+- 窗口化原生 Wayland 输入依赖 M2b 嵌套；M2a 只做全屏穿透。
 
 ---
 
@@ -132,12 +171,12 @@ X11/XWayland 游戏窗口
 ## 里程碑依赖
 
 ```text
-M0 ──→ M1a ──→ M1b ──→ M1c ──→ M2 ──→ M3
+M0 ──→ M1a ──→ M1b ──→ M1c ──→ M2a ──→ M2b ──→ M2c ──→ M3
 ```
 
-M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依赖 M1a 的实例与显示器模型；M2 的 Wayland 后端复用 M0 定义的 `CaptureBackend` / `PresentBackend` / `InputBackend` 接口。
+M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依赖 M1a 的实例与显示器模型；M2a 引入 Wayland 呈现/捕获核心；M2b 的嵌套合成器复用 M2a 的 overlay/呈现/输入框架；M2c 依赖 M2a/M2b 的帧路径。
 
-未排期功能、设置界面需求和明确不做的项见 [backlog.md](backlog.md)。
+未排期功能、设置界面需求和明确不做的项见 [backlog.md](backlog.md)；M2 详细计划见 [m2-plan.md](m2-plan.md)。
 
 ---
 
@@ -150,6 +189,7 @@ M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依�
 | 0.2.0 | M1a（单实例/退出审计/多显示器基础） |
 | 0.2.1 | M1b（指标/S/M/L/脏矩形/上传优化/零拷贝 spike） |
 | 0.3.0 | M1c（设置/托盘/Profile/自定义 effect/VL/开发模式；动画留后续） |
-| 0.2.x | M1c |
-| 0.3.x | M2 |
+| 0.4.0 | M2a（Wayland layer-shell / XWayland 混合 / 多屏 / portal 捕获） |
+| 0.5.0 | M2b（嵌套合成器 / 窗口化原生输入 / Lutris） |
+| 0.6.0 | M2c（HDR/linear、零拷贝、混合管线、跨屏拼接） |
 | 1.0.0 | M3 完成，接口稳定 |
