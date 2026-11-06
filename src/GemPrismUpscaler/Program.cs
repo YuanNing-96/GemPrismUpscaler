@@ -4,6 +4,7 @@ using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
 using System;
@@ -48,6 +49,7 @@ sealed class Program
         }
 
         if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" ||
+                                args[0] == "--portal-window" || args[0] == "--portal-monitor" ||
                                 args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
@@ -129,6 +131,9 @@ sealed class Program
                 PrintUsage();
                 return 0;
             }
+
+            if (args.Any(a => a == "--portal-window" || a == "--portal-monitor"))
+                return RunPortal(args);
 
             using var display = new X11Display();
             if (args[0] == "--list")
@@ -302,6 +307,83 @@ sealed class Program
         };
     }
 
+    private static int RunPortal(string[] args)
+    {
+        try
+        {
+            EnsureConfiguration(args);
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
+            {
+                Console.Error.WriteLine("--portal-window requires a Wayland session (WAYLAND_DISPLAY unset)");
+                return 1;
+            }
+
+            if (!TryEffectFromArgs(args, out var effect, out string? effectError))
+            {
+                Console.Error.WriteLine(effectError);
+                return 2;
+            }
+
+            var mode = args.Any(a => a == "--stretch") ||
+                       string.Equals(Config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+                ? ScalingMode.Stretch
+                : ScalingMode.Fit;
+
+            string? monitorName = GetOption(args, "--monitor");
+            if (string.IsNullOrWhiteSpace(monitorName) &&
+                !string.Equals(Config.Display.Monitor, "auto", StringComparison.OrdinalIgnoreCase))
+                monitorName = Config.Display.Monitor;
+
+            var sourceType = args.Any(a => a == "--portal-monitor")
+                ? PortalSourceType.Monitor
+                : PortalSourceType.Window;
+
+            if (!SingleInstance.TryAcquire(InstanceMode.Cli, out var guard, out var existing))
+            {
+                ReportExistingInstance(existing, gui: false);
+                return 4;
+            }
+
+            using (guard)
+            {
+                using var session = new PortalUpscaleSession(mode, effect, monitorName, sourceType);
+                session.Message += m => Console.WriteLine(m);
+                using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+                {
+                    ctx.Cancel = true;
+                    session.Stop();
+                });
+                using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx =>
+                {
+                    ctx.Cancel = true;
+                    session.Stop();
+                });
+
+                try
+                {
+                    Console.WriteLine("select a window in the system dialog...");
+                    session.Start();
+                    Console.WriteLine($"running; backend=portal; overlay={session.OverlayDescription}; " +
+                                      $"effect={session.EffectName}; Ctrl+C to stop");
+                    while (session.IsRunning) Thread.Sleep(200);
+                    Console.WriteLine($"stopped: {session.ExitReason}");
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"portal session failed: {ex.Message}");
+                    return 1;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"portal fatal: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine(ex);
+            return 1;
+        }
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine("""
@@ -309,6 +391,8 @@ sealed class Program
               GemPrismUpscaler                          launch the configuration UI
               GemPrismUpscaler --list                   list capturable windows and monitors
               GemPrismUpscaler --window <id> [options]  start a session directly
+              GemPrismUpscaler --portal-window [options] start a native Wayland portal session
+              GemPrismUpscaler --portal-monitor [options] capture a monitor via portal
               GemPrismUpscaler --status                 query the running instance
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
@@ -330,6 +414,11 @@ sealed class Program
                                         capture backend (portal is native Wayland, M2a)
               --input auto|passthrough|forward
                                         Wayland pointer handling (forward = XSendEvent)
+
+            options for --portal-window / --portal-monitor:
+              --monitor <name>          layer-shell output (auto by default)
+              --effect <id>             built-in or custom effect
+              --stretch                 stretch instead of preserving aspect ratio
             """);
     }
 

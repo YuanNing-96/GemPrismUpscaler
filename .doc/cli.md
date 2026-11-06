@@ -1,6 +1,6 @@
 # GemPrismUpscaler CLI 使用说明
 
-- 适用版本：`0.3.0`（M1c）为当前可用；`0.4.0`（M2a）新增的 `--backend/--capture/--input/--portal-window` 以实际 `--help` 为准。
+- 适用版本：`0.4.0`（M2a）；`--backend/--capture/--input/--portal-window` 已实现，具体以实际 `--help` 为准。
 - 图形界面与 CLI 共用同一份配置：`~/.config/GemPrismUpscaler/config.toml`（`GEMPRISM_CONFIG` 可覆盖）。
 - 本文是发布文档；M2 计划见 [m2-plan.md](m2-plan.md)。
 
@@ -163,7 +163,7 @@ monitor = "auto"
 | 参数 | 取值 | 说明 |
 |---|---|---|
 | `--backend <mode>` | `auto`/`x11`/`wayland` | 选择呈现/捕获平台；`auto` 按会话和源类型选择 |
-| `--capture <mode>` | `auto`/`x11`/`portal` | `x11` = XShm；`portal` = ScreenCast + PipeWire（原生 Wayland；当前构建尚未实现，会回退 X11 并提示） |
+| `--capture <mode>` | `auto`/`x11`/`portal` | `x11` = XShm；`portal` = ScreenCast + PipeWire（原生 Wayland；`--window` 路径仍回退 X11，原生窗口用 `--portal-window`） |
 | `--input <mode>` | `auto`/`passthrough`/`forward` | `passthrough` = 空 input region；`forward` = 接收后 `XSendEvent` |
 | `--portal-window` | 无值 | 打开系统窗口选择器，用于原生 Wayland 窗口 |
 
@@ -192,6 +192,10 @@ mode = "auto"      # auto | passthrough | forward
 > 以下为计划，不在 M2a 实现。
 
 ```bash
+# 原生 Wayland：打开系统选择器并超分（M2a 已实现）
+GemPrismUpscaler --portal-window --monitor HDMI-A-1
+GemPrismUpscaler --portal-monitor --monitor HDMI-A-1
+
 # 启动一个游戏/启动器到私有嵌套合成器
 GemPrismUpscaler --nested -- <command...>
 

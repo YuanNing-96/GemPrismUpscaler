@@ -1,5 +1,27 @@
 # 更新记录
 
+## v0.4.0（2026-11-07）· M2a：Wayland layer-shell、XWayland 混合与 portal 捕获
+
+M2a 把呈现从 X11 override-redirect 扩展到 Wayland layer-shell，并加入原生 Wayland portal 捕获。按约定，M2a 只做主要路径冒烟；完整回归/边界兼容性留到 v1.0。
+
+### 新增
+
+- **Wayland 呈现**：`zwlr_layer_shell_v1` overlay + Vulkan `VK_KHR_wayland_surface`；`wp_viewporter` + `wp_fractional_scale_manager_v1` 分数缩放；每输出 layer surface。
+- **XWayland 混合**：X11 捕获（XShm + XDamage + 脏矩形）+ Wayland overlay + `wl_pointer` → `XSendEvent` 输入转发；保留 `--window` 体验。
+- **原生 Wayland 捕获**：`--portal-window` / `--portal-monitor`；xdg-desktop-portal ScreenCast v6 + PipeWire（GStreamer `pipewiresrc` 桥）；`restore_token` 轮换保存到 `portal.token`；GUI 会话页新增“Wayland 窗口…”入口。
+- **多屏/缩放**：`wl_output` + `zxdg_output_v1` 输出枚举；旋转/100%/150% scale；当前输出消失时回退另一块屏。
+- **CLI/config**：`--backend auto|x11|wayland`、`--input auto|passthrough|forward`、`--capture auto|x11|portal`；`[capture]`、`[input] pointer_mode`。
+- **文档**：新增 `.doc/m2-plan.md`（M2a/M2b/M2c 详细计划）、`.doc/cli.md`；更新 roadmap/design/compatibility/backlog/README。
+- **测试**：新增 Wayland 几何/旋转 scale/4:3/配置测试；总计 101/101。
+
+### 已知限制
+
+- **portal GlobalShortcuts 未接**：XWayland 焦点下 `XGrabKey` 仍可用；原生 Wayland 焦点下不保证。
+- **窗口化原生捕获含标题栏/阴影**：KDE 窗口流为 960×582（150% + 装饰）；M2a 正式验收以全屏/无边框源为准，窗口化原生输入由 M2b 嵌套合成器解决。
+- **XWayland 捕获撕裂**仍用 XShm；最终方案在 M2c。
+- **wlroots 真实桌面**未验证；M2 只做协议级。
+- `--window` + `--capture portal` 未接；原生窗口用 `--portal-window`。
+
 ## v0.3.0（2026-11-06）· M1c：设置、托盘、Profile、自定义 effect 与 VL
 
 M1c 把 M1a/M1b 的能力收拢成可日常使用的配置界面，并补齐 Anime4K VL。按约定，M1c 不做动画、不做完整回归，边界兼容性留到 v1.0 统一验收。

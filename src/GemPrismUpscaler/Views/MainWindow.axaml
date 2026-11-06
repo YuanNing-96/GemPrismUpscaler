@@ -42,6 +42,7 @@
                     <ListBox Grid.Row="1" x:Name="WindowList" Margin="0,4"/>
                     <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8" VerticalAlignment="Bottom">
                         <Button x:Name="StartButton" Content="开始超分"/>
+                        <Button x:Name="PortalButton" Content="Wayland 窗口…"/>
                         <Button x:Name="StopButton" Content="停止" IsEnabled="False"/>
                         <Button x:Name="ExitButton" Content="退出"/>
                         <TextBlock x:Name="HotkeyHint" Text="热键：Alt+Shift+A 显示/隐藏覆盖层"

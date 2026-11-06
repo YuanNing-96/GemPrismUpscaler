@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly SingleInstance? _instance;
     private AppConfig _config;
     private UpscaleSession? _session;
+    private PortalUpscaleSession? _portalSession;
     private List<WindowInfo> _windows = new();
     private List<MonitorInfo> _monitors = new();
     private string _runningTitle = string.Empty;
@@ -98,6 +99,7 @@ public partial class MainWindow : Window
     private void WireEvents()
     {        RefreshButton.Click += (_, _) => RefreshWindows();
         StartButton.Click += (_, _) => StartSession();
+        PortalButton.Click += (_, _) => StartPortalSession();
         StopButton.Click += (_, _) => StopSession("已停止");
         ExitButton.Click += (_, _) =>
         {
@@ -463,7 +465,7 @@ public partial class MainWindow : Window
     private void UpdateTrayState()
     {
         _tray?.UpdateState(
-            sessionActive: _session is not null,
+            sessionActive: _session is not null || _portalSession is not null,
             canStart: WindowList.SelectedItem is WindowInfo,
             overlayVisible: _session?.IsOverlayVisible == true);
     }
@@ -472,8 +474,8 @@ public partial class MainWindow : Window
         Environment.ProcessId,
         "gui",
         _instance?.StartedAt ?? DateTimeOffset.Now,
-        _session?.IsRunning == true,
-        _session?.MonitorName);
+        _session?.IsRunning == true || _portalSession?.IsRunning == true,
+        _session?.MonitorName ?? _portalSession?.OverlayDescription);
 
     private void RefreshWindows(bool quiet = false)
     {
@@ -616,6 +618,62 @@ public partial class MainWindow : Window
         if (match is not null) MonitorCombo.SelectedItem = match;
     }
 
+    private void StartPortalSession()
+    {
+        StopSession("切换为 Wayland 门户");
+        var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
+        var effect = EffectCombo.SelectedItem as EffectDefinition
+                     ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
+        if (!effect.IsAvailable)
+        {
+            ErrorBus.Functional("effect", $"效果“{effect.DisplayName}”不可用：{effect.UnavailableReason}");
+            return;
+        }
+        string? monitorName = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
+        var session = new PortalUpscaleSession(mode, effect, monitorName);
+        session.Message += OnSessionMessage;
+        _portalSession = session;
+        _runningTitle = "Wayland 窗口";
+        StartButton.IsEnabled = false;
+        PortalButton.IsEnabled = false;
+        StopButton.IsEnabled = true;
+        StatusText.Text = "请在系统对话框中选择要共享的窗口…";
+        AppendLog("portal: waiting for system window picker");
+
+        Task.Run(() =>
+        {
+            try
+            {
+                session.Start();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(_portalSession, session)) return;
+                    StatusText.Text = $"运行中：Wayland 门户（{session.OverlayDescription}）";
+                    AppendLog("portal session started");
+                    UpdateTrayState();
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (ReferenceEquals(_portalSession, session))
+                    {
+                        _portalSession = null;
+                        _runningTitle = string.Empty;
+                        StartButton.IsEnabled = true;
+                        PortalButton.IsEnabled = true;
+                        StopButton.IsEnabled = false;
+                        StatusText.Text = "Wayland 门户启动失败";
+                    }
+                    AppendLog($"portal start error: {ex.Message}");
+                    ErrorBus.Functional("portal", "Wayland 门户启动失败", ex);
+                    session.Dispose();
+                });
+            }
+        });
+    }
+
     private void StartSession()
     {
         if (WindowList.SelectedItem is not WindowInfo info)
@@ -724,6 +782,16 @@ public partial class MainWindow : Window
 
     private void StopSession(string? status = null)
     {
+        var portal = _portalSession;
+        _portalSession = null;
+        if (portal is not null)
+        {
+            portal.Message -= OnSessionMessage;
+            AppendLog("stopping portal session");
+            try { portal.Stop(); } catch (Exception ex) { AppendLog($"portal stop error: {ex.Message}"); }
+            portal.Dispose();
+        }
+
         var session = _session;
         _session = null;
         _runningTitle = string.Empty;
@@ -735,6 +803,7 @@ public partial class MainWindow : Window
             session.Dispose();
         }
         StartButton.IsEnabled = true;
+        PortalButton.IsEnabled = true;
         StopButton.IsEnabled = false;
         if (StatusText is not null) StatusText.Text = status ?? "已停止";
         UpdateTrayState();
@@ -742,6 +811,22 @@ public partial class MainWindow : Window
 
     private void WatchSession()
     {
+        var portal = _portalSession;
+        if (portal is not null)
+        {
+            if (portal.IsRunning)
+            {
+                string text = $"运行中：Wayland 门户（{portal.OverlayDescription}）";
+                if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
+                    StatusText.Text = text;
+                return;
+            }
+            string portalReason = portal.ExitReason;
+            StopSession(string.IsNullOrWhiteSpace(portalReason) ? "已停止"
+                : $"已停止：{ChineseReason(portalReason)}");
+            return;
+        }
+
         var session = _session;
         if (session is null) return;
 

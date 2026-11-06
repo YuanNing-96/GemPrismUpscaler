@@ -1,7 +1,7 @@
 # GemPrismUpscaler · M2 阶段计划（M2a / M2b / M2c）
 
 - 更新时间：2026-11-07
-- 当前稳定版：`0.3.0`（M1c）
+- 当前稳定版：`0.4.0`（M2a，核心与 portal 已实现）
 - M2 目标版本：M2a `0.4.0`、M2b `0.5.0`、M2c `0.6.0`
 - 目标环境：KDE Plasma 6.8.2 Wayland + XWayland；NVIDIA RTX 4060 Laptop；HDMI-A-1 3840×2160@144（HDR、150%）+ DP-1 1800×2880（100%）
 - 本文是 M2 的计划与交接文档。`roadmap.md` 是摘要，本文是详细范围/验收/实现决策；`design.md` 记录架构，`compatibility.md` 记录支持矩阵，`backlog.md` 记录未排期项。
@@ -240,13 +240,20 @@ mode = "auto"        # auto | passthrough | forward
 - XWayland 混合：X11 捕获 + Wayland overlay + `wl_pointer` → `XSendEvent`；弹窗隐藏/恢复、静止画面、输入（uinput 指针）冒烟。
 - 多屏/输出选择：按 X11 monitor 名称匹配 `wl_output`；当前输出消失时回退到另一块屏。
 - CLI/config：`--backend auto|x11|wayland`、`--input auto|passthrough|forward`、`--capture auto|x11|portal`（portal 未实现，回退 X11 并提示）；`[capture]`、`[input] pointer_mode`。
+- **portal + PipeWire 原生 Wayland 捕获（2026-11-07 验证）**：
+  - `--portal-window` / `--portal-monitor`，Tmds.DBus.Protocol + 生成的 ScreenCast/Request/Session 代理。
+  - KDE 系统选择器；`restore_token` 单次使用并保存到 `~/.config/GemPrismUpscaler/portal.token`，后续免打扰。
+  - PipeWire fd + serial → `gst-launch pipewiresrc` → 专用 frame pipe（避免 `-v` caps 日志污染帧）→ BGRA 帧。
+  - caps 从 gst `-v` stdout 解析（KDE 窗口流可能没有 `size` 属性）。
+  - 实测 vkcube 640×360 窗口：`pipewire caps 960x582`（150% + 窗口装饰）、60–69fps、GPU 59–68%、dest=3563×2160。
+  - 已知：KDE 窗口捕获包含标题栏/阴影；M2a 的正式验收以全屏/无边框原生窗口为准，窗口化装饰裁剪留后续。
 - 自动化：构建 0 warning / 0 error；测试 101/101。
 
 未完成（M2a 剩余）：
 
-- portal ScreenCast + PipeWire 原生 Wayland 捕获、`restore_token`、原生窗口选择器。
 - portal GlobalShortcuts（当前 XWayland 仍用 `XGrabKey`，`hotkey=True`；原生 Wayland 焦点下不保证）。
-- 输出热插拔的真实拔插回归；嵌套/原生窗口化输入（M2b）。
+- 原生窗口选择器 UI（当前 CLI `--portal-window`；GUI 入口待接）。
+- 窗口化原生捕获的装饰裁剪；输出热插拔真实拔插回归；嵌套/原生窗口化输入（M2b）。
 - 真实视觉小说手测与 M2a 验收记录。
 
 ### 5.10 实现顺序

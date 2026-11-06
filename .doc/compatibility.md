@@ -2,7 +2,7 @@
 
 本文记录 GemPrismUpscaler 的支持范围、已测试环境和已知限制。里程碑进度见 [roadmap.md](roadmap.md)，M2 详细计划见 [m2-plan.md](m2-plan.md)，未排期功能见 [backlog.md](backlog.md)。
 
-> **M2 状态**：M2a（Wayland 平台核心）开发中；M2b（嵌套合成器）与 M2c（HDR/零拷贝/混合管线）为计划。下表中标注“M2a 开发中”的项在 M2a 完成前仍以当前 M1c 行为为准。
+> **M2 状态**：M2a（Wayland 平台核心 + portal 捕获）已实现并冒烟；GlobalShortcuts/窗口化原生装饰裁剪/正式手测待补。M2b（嵌套合成器）与 M2c（HDR/零拷贝/混合管线）为计划。
 
 ## 1. 支持矩阵
 
@@ -15,12 +15,12 @@
 | KDE Plasma X11 | 未验证 | 理论可用；需要先确认窗口捕获/overlay 行为 |
 | GNOME + Wayland | 未验证 | XWayland 窗口理论可捕获；overlay/焦点行为未测试；M2 不做完整支持 |
 | wlroots（sway/Hyprland/niri 等）+ XWayland | 未验证 | M2 只做协议级验证；真实桌面验收推后 |
-| 原生 Wayland 窗口 | M2a 开发中 | portal ScreenCast + PipeWire；窗口化原生输入由 M2b 嵌套解决 |
+| 原生 Wayland 窗口 | M2a 已实现（窗口化输入 M2b） | portal ScreenCast + PipeWire；全屏输入穿透；窗口捕获含标题栏/阴影，正式验收以全屏/无边框为准 |
 | X11 顶层窗口 | 支持 | XShm + XDamage |
 | XWayland 顶层窗口 | 支持 | 与 X11 同一捕获路径；窗口坐标为物理像素；M2a 可走 Wayland overlay |
 | 单显示器 | 支持 | |
-| 多显示器 | M1a 基础 / M2a 开发中 | M2a：Wayland 输出枚举、热插拔、每屏缩放；overlay 只覆盖选中屏 |
-| 多显示器热插拔 | M2a 开发中 | M1a 会重新枚举并在选屏失效时回退；M2a 增加 Wayland 输出热插拔 |
+| 多显示器 | M1a 基础 + M2a | M2a：Wayland 输出枚举、基础热插拔、每屏缩放；overlay 只覆盖选中屏 |
+| 多显示器热插拔 | M2a 已实现（基础） | M1a 会重新枚举并在选屏失效时回退；M2a 监听 Wayland global_remove 并回退到另一块屏 |
 | HDR 桌面 | SDR 直通 | HDR 开启时可正常显示 SDR 内容；HDR/linear 色彩在 M2c |
 | 视觉小说/2D 输入 | 支持 | X11/XWayland：`XSendEvent`；M2a 全屏原生：输入穿透；窗口化原生：M2b |
 | FPS/鼠标视角/raw input | M2b/M2c 计划 | 全屏/嵌套模式可输入穿透；窗口化原生用嵌套合成器；纯 X11 方案 M2c |
@@ -65,7 +65,7 @@
 
 ## 4. 已知限制
 
-1. **原生 Wayland**：M2a 开发中（portal/PipeWire + layer-shell overlay）；窗口化原生 Wayland 输入映射由 M2b 嵌套合成器解决；M2a 只做全屏输入穿透。
+1. **原生 Wayland**：M2a 已实现 portal/PipeWire + layer-shell overlay；窗口化原生输入映射由 M2b 嵌套合成器解决；M2a 只做全屏输入穿透；窗口捕获含标题栏/阴影。
 2. **多显示器**：M1a 有基础版；M2a 增加 Wayland 输出枚举/热插拔/每屏缩放；跨屏连续拼接在 M2c（如需）。
 3. **FPS/raw input**：M2a 全屏源可输入穿透；窗口化原生 Wayland 由 M2b 嵌套合成器解决；纯 X11 会话的 raw input 在 M2c 评估。
 4. **HDR**：SDR 直通；HDR/linear 色彩在 M2c。

@@ -97,7 +97,7 @@ X11/XWayland 游戏窗口
 
 M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性能**。完整范围、决策、实现与验收见 [m2-plan.md](m2-plan.md)。
 
-### M2a · Wayland 平台核心（v0.4.0，核心已实现；portal/热键待补）
+### M2a · Wayland 平台核心（v0.4.0，核心与 portal 已实现；GlobalShortcuts/验收待补）
 
 | 模块 | 内容 |
 |---|---|
@@ -109,7 +109,7 @@ M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性�
 | 热键 | portal `GlobalShortcuts` v2；失败时明确提示并回退 `XGrabKey` best-effort |
 | CLI/文档 | `--backend`、`--capture`、`--input`、`--portal-window`；`.doc/cli.md` |
 
-**当前状态**：Wayland layer-shell overlay + Vulkan WSI、XWayland 混合、输入转发、多屏/分数缩放已实现并冒烟；portal/PipeWire 原生捕获与 GlobalShortcuts 尚未实现（`--capture portal` 目前回退 X11 并提示）。详见 `.agent/M2a-开发记录.md`。
+**当前状态**：Wayland layer-shell overlay + Vulkan WSI、XWayland 混合、输入转发、多屏/分数缩放、portal + PipeWire 原生 Wayland 捕获（`--portal-window`/`--portal-monitor`、restore token）已实现并冒烟；GlobalShortcuts 与 GUI 原生选择器入口待补。详见 `.agent/M2a-开发记录.md`。
 
 **验收标准**：
 

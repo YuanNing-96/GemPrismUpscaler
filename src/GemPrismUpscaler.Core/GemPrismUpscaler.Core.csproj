@@ -6,6 +6,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>GemPrismUpscaler.Core</RootNamespace>
     <AssemblyName>GemPrismUpscaler.Core</AssemblyName>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +17,20 @@
     <PackageReference Include="Tomlyn" Version="2.10.1" />
     <PackageReference Include="NWayland" Version="0.11.0" />
     <PackageReference Include="NWayland.Protocols.Wlr" Version="0.11.0" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
+    <PackageReference Include="Tmds.DBus.Generator" Version="0.94.1" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.portal.ScreenCast.xml"
+                     Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
+                     DBusGeneratorMode="Proxy" Visibility="public" />
+    <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.portal.Request.xml"
+                     Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
+                     DBusGeneratorMode="Proxy" Visibility="public" />
+    <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.portal.Session.xml"
+                     Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
+                     DBusGeneratorMode="Proxy" Visibility="public" />
   </ItemGroup>
 
   <ItemGroup>

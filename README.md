@@ -10,12 +10,12 @@
 
 | 维度 | 状态 |
 |---|---|
-| 操作系统 | **Linux：部分支持**（仅 X11/XWayland）；**Windows：暂不支持**；**macOS：暂不支持** |
-| 桌面/会话 | **KDE Plasma 6 Wayland + XWayland：已验证**；KDE X11：理论可用、未验证；GNOME / wlroots（sway、Hyprland、niri 等）+ XWayland：未验证；**原生 Wayland 窗口：不支持**（M2） |
-| 窗口类型 | X11 / XWayland 顶层窗口：支持；原生 Wayland 窗口：不支持 |
-| 显示器 | 单显示器：支持；**多显示器：M1a 基础支持**（自动跟随游戏窗口 / 手动选择输出屏）；热插拔、每屏 DPI 等完整支持在 M2 |
-| HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；HDR 色彩管理：未做（M2） |
-| 输入 | 视觉小说/2D 的鼠标点击、滚轮、键盘：支持；**FPS/鼠标视角/raw input：暂不支持** |
+| 操作系统 | **Linux：部分支持**（X11/XWayland + M2a 原生 Wayland portal）；**Windows：暂不支持**；**macOS：暂不支持** |
+| 桌面/会话 | **KDE Plasma 6 Wayland + XWayland：已验证**；原生 Wayland：M2a 已实现（portal + layer-shell）；KDE X11：理论可用、未验证；GNOME / wlroots：未验证（M2 只做协议级） |
+| 窗口类型 | X11 / XWayland 顶层窗口：支持；原生 Wayland 窗口：M2a 通过 portal 窗口/显示器捕获（窗口化含标题栏/阴影，全屏/无边框推荐） |
+| 显示器 | 单显示器：支持；多显示器：M1a 基础 + M2a Wayland 输出枚举/分数缩放/基础热插拔 |
+| HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；HDR 色彩管理：M2c |
+| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入：M2b 嵌套合成器 |
 | GPU | NVIDIA 专有驱动：已验证；AMD/Intel Vulkan：理论可用、未验证；多 GPU/混合显卡：未验证 |
 | 算法 | **Anime4K S/M/L/VL 2× + Lanczos-2：支持**（默认 S；VL 为实验最高画质档）；双线性回退：支持；FSR1、NIS、Lanczos-3、Bicubic：未排期 |
 | 自定义 effect | **支持**：TOML + 预编译 SPIR-V，运行时不需要 glslang；详见 [.doc/effects.md](.doc/effects.md) |
@@ -184,15 +184,17 @@ done
 - 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
 - 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
 - 零拷贝只完成“导出 + Vulkan 导入”可行性，未做 fence 同步和真实游戏端到端验证，**不进入默认链路**。详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
-- 多显示器完整热插拔/每屏 DPI、原生 Wayland、HDR/linear 色彩管理仍在 M2。
+- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay；窗口化原生捕获含标题栏/阴影，窗口化原生输入由 M2b 嵌套解决；HDR/linear 在 M2c。
 - **M1c 不做动画**（留到 v1.0 前评估）；VL 是实验最高画质档，帧率不作为验收门槛。
 - **KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动**（DP 100% 正常）。这是 Avalonia/Wayland popup 的定位限制，M1 不处理，已记录在 [.doc/backlog.md](.doc/backlog.md) §7。
 - 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 上限 256 B（设备可能更低）。
-- M1c 按约定不做完整回归/边界兼容性验收，留到 v1.0 统一进行。
+- M2a 按约定只做主要路径冒烟；完整回归/边界兼容性留到 v1.0 统一进行。
 
 ## 文档
 
 - [设计文档](.doc/design.md) —— 需求、架构、技术选型、实现细节
+- [M2 计划](.doc/m2-plan.md) —— M2a/M2b/M2c 范围、实现、验收与交接
+- [CLI 使用](.doc/cli.md) —— 命令、参数、退出码与示例
 - [路线图](.doc/roadmap.md) —— M0/M1/M2 阶段划分与验收标准
 - [兼容性](.doc/compatibility.md) —— 支持矩阵、已测试环境、已知限制
 - [功能 backlog](.doc/backlog.md) —— 未排期功能与 M1 记录项
