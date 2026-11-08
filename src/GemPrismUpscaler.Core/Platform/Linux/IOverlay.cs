@@ -28,6 +28,18 @@ public enum OverlayPointerKind
 /// </summary>
 public readonly record struct OverlayPointerEvent(OverlayPointerKind Kind, int X, int Y, int Button = 0);
 
+public enum OverlayKeyState
+{
+    Pressed,
+    Released,
+    Repeated
+}
+
+/// <summary>Keyboard event from the presentation surface. KeyCode is evdev.</summary>
+public readonly record struct OverlayKeyEvent(int KeyCode, OverlayKeyState State);
+
+public readonly record struct OverlayModifiers(int Depressed, int Latched, int Locked, int Group);
+
 /// <summary>
 /// Full-screen presentation surface. X11 uses an override-redirect window;
 /// Wayland uses a wlr-layer-shell surface on one output.
@@ -56,6 +68,14 @@ public interface IOverlay : IDisposable
 
     event Action<OverlayPointerEvent>? Pointer;
 
+    /// <summary>XKB keymap bytes delivered by the compositor (Wayland only).</summary>
+    event Action<byte[]>? Keymap;
+
+    /// <summary>Keyboard events captured by the overlay (Wayland only).</summary>
+    event Action<OverlayKeyEvent>? Key;
+
+    event Action<OverlayModifiers>? Modifiers;
+
     void Show();
     void Hide();
 
@@ -71,4 +91,7 @@ public interface IOverlay : IDisposable
 
     /// <summary>Wayland only: capture pointer events (forward) or leave them transparent.</summary>
     void SetPointerForwarding(bool enabled);
+
+    /// <summary>Wayland only: request keyboard focus and capture key events.</summary>
+    void SetKeyboardForwarding(bool enabled);
 }

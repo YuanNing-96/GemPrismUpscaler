@@ -120,18 +120,18 @@ M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性�
 5. 纯 X11 会话主要路径冒烟不回归。
 6. 窗口化原生 Wayland 输入不在 M2a 解决（M2b 嵌套）。
 
-### M2b · 嵌套合成器（v0.5.0，待启动；B0 spike 先行）
+### M2b · 嵌套合成器（v0.5.0，B0/B0.5 验证完成；α/β 待开发）
 
 | 模块 | 内容 |
 |---|---|
 | 私有虚拟显示器 | sway headless 优先 / 隐藏嵌套窗口回退；输出 = 主窗口客户区尺寸（含 4:3） |
 | 捕获 | 主程序内 C# helper：`wlr-screencopy` / `wlr-export-dmabuf`；Unix socket/共享内存 |
-| 输入 | `wlr-virtual-pointer` 绝对/相对；虚拟键盘转发；指针锁定/raw input |
+| 输入 | 原生 Wayland：`wlr-virtual-pointer` 绝对/相对；XWayland：nested XTest（raw 已验证）；虚拟键盘；指针锁定 |
 | 窗口识别 | Profile / token + PID/进程树 / sway IPC / transient+window type；歧义手动选择 |
 | 弹窗/启动器 | 嵌套内对话框浮动；启动器 → 游戏切换；`--nested` / `--nested-session` |
 | Lutris | per-game 环境变量/wrapper；Steam/Heroic 文档化 best-effort |
 
-**当前状态**：尚未开始代码；先做 B0 spike（headless sway/抓帧/虚拟输入/get_tree），详见 `.agent/M2b-开发交接.md`。
+**当前状态**：B0/B0.5 已完成主要验证；M2bα 第一版已实现，等待用户验收（nested/抓帧/overlay/2D 输入/动态分辨率；测试 113/113）。实现拆为 **α（嵌套平台+2D+动态分辨率）/ β1（patched sway+指针锁定）/ β2（raw+终末地）**，详见 `.agent/M2b-αβ-实施计划.md` 与 `.agent/M2b-开发记录.md`。
 
 **验收标准**：
 

@@ -1,0 +1,427 @@
+using System.Runtime.CompilerServices;
+using System.Text;
+using GemPrismUpscaler.Core.Diagnostics;
+using GemPrismUpscaler.Core.Geometry;
+using GemPrismUpscaler.Core.Platform.Linux.X11;
+
+namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
+
+/// <summary>
+/// Single KDE-facing window for a nested game. It presents either the original
+/// frame in a normal decorated window, or the upscaled frame fullscreen. The
+/// private sway game itself has no KDE window.
+/// </summary>
+public sealed class NestedHostWindow : IDisposable
+{
+    private readonly X11Display _display;
+    private readonly MonitorInfo _monitor;
+    private readonly ulong _fullscreenAtom;
+    private readonly ulong _deleteWindowAtom;
+    private readonly ulong _wmProtocolsAtom;
+    private bool _disposed;
+    private bool _focused;
+    private bool _fullscreen;
+    private int _originalWidth;
+    private int _originalHeight;
+    private int _width;
+    private int _height;
+
+    public ulong Window { get; }
+    public int X { get; private set; }
+    public int Y { get; private set; }
+    public int Width => _width;
+    public int Height => _height;
+    public bool IsVisible { get; private set; }
+    public bool IsFocused => _focused;
+    public bool IsFullscreen => _fullscreen;
+    public string MonitorName => _monitor.Name;
+
+    public X11Display X11 => _display;
+    public IntPtr X11Window => (IntPtr)Window;
+
+    public event Action<OverlayPointerEvent>? Pointer;
+    public event Action<OverlayKeyEvent>? Key;
+    public event Action<OverlayModifiers>? Modifiers;
+    public event Action<bool>? FocusChanged;
+    public event Action? Closed;
+    public event Action? CloseRequested;
+
+    public NestedHostWindow(string? outputName, string title,
+        int originalWidth, int originalHeight, bool startFullscreen,
+        ulong transientFor = 0, bool dialog = false)
+    {
+        _display = new X11Display();
+        var monitors = X11MonitorEnumerator.List(_display);
+        MonitorInfo monitor = default;
+        if (!string.IsNullOrWhiteSpace(outputName))
+        {
+            monitor = monitors.FirstOrDefault(m =>
+                string.Equals(m.Name, outputName, StringComparison.OrdinalIgnoreCase));
+            if (monitor.Width <= 0)
+            {
+                Log.Warn($"nested host monitor '{outputName}' not found; using largest. " +
+                         $"available={string.Join(", ", monitors.Select(m => $"{m.Name}:{m.Width}x{m.Height}"))}");
+                monitor = monitors.OrderByDescending(m => (long)m.Width * m.Height).FirstOrDefault();
+            }
+        }
+        else
+        {
+            monitor = monitors.FirstOrDefault(m => m.Primary);
+        }
+        if (monitor.Width <= 0) monitor = monitors[0];
+        _monitor = monitor;
+        Log.Info($"nested host monitor requested='{outputName ?? "auto"}' " +
+                 $"selected='{monitor.Name}' geometry={monitor.X},{monitor.Y} {monitor.Width}x{monitor.Height} " +
+                 $"available={string.Join(", ", monitors.Select(m => $"{m.Name}:{m.Width}x{m.Height}"))}");
+
+        _originalWidth = Math.Max(64, originalWidth);
+        _originalHeight = Math.Max(64, originalHeight);
+        _fullscreen = startFullscreen;
+        _deleteWindowAtom = X11Native.XInternAtom(_display.Handle, "WM_DELETE_WINDOW", 0);
+        _wmProtocolsAtom = X11Native.XInternAtom(_display.Handle, "WM_PROTOCOLS", 0);
+
+        // Always create the client at its original size. KWin records this
+        // geometry and restores it when _NET_WM_STATE_FULLSCREEN is removed.
+        // Creating the window already fullscreen makes the restore size the
+        // whole monitor, which defeats the windowed original mode.
+        int w = _originalWidth;
+        int h = _originalHeight;
+        X = monitor.X + (monitor.Width - w) / 2;
+        Y = monitor.Y + (monitor.Height - h) / 2;
+        _width = w;
+        _height = h;
+
+        Window = X11Native.XCreateSimpleWindow(_display.Handle, _display.Root, X, Y,
+            (uint)w, (uint)h, 0, 0, 0);
+        if (Window == 0) throw new InvalidOperationException("XCreateSimpleWindow failed");
+        SetDialogProperties(transientFor, dialog);
+        if (_wmProtocolsAtom != 0 && _deleteWindowAtom != 0)
+        {
+            ulong protocol = _deleteWindowAtom;
+            X11Native.XChangeProperty(_display.Handle, Window, _wmProtocolsAtom,
+                X11Native.XA_ATOM, 32, X11Native.PropModeReplace, ref protocol, 1);
+        }
+
+        long mask = X11Native.KeyPressMask | X11Native.KeyReleaseMask |
+                    X11Native.ButtonPressMask | X11Native.ButtonReleaseMask |
+                    X11Native.PointerMotionMask | X11Native.EnterWindowMask |
+                    X11Native.LeaveWindowMask | X11Native.FocusChangeMask |
+                    X11Native.StructureNotifyMask;
+        X11Native.XSelectInput(_display.Handle, Window, mask);
+
+        var hints = new X11Native.XWMHints { Flags = X11Native.InputHint, Input = 1 };
+        X11Native.XSetWMHints(_display.Handle, Window, ref hints);
+        SetTitle(title);
+        _fullscreenAtom = X11Native.XInternAtom(_display.Handle, "_NET_WM_STATE_FULLSCREEN", 0);
+        if (_fullscreen) SetFullscreenProperty(true);
+        X11Native.XMapRaised(_display.Handle, Window);
+        _display.Sync();
+        IsVisible = true;
+        for (int i = 0; i < 10; i++)
+        {
+            Thread.Sleep(10);
+            Pump();
+        }
+        UpdateGeometry();
+    }
+
+    private void SetDialogProperties(ulong transientFor, bool dialog)
+    {
+        // Separate X connections still address the same X server, so the
+        // dialog host can be made transient for the main host. KWin then keeps
+        // the exit/confirm dialog above its parent instead of letting the main
+        // host raise over it.
+        if (transientFor != 0)
+        {
+            ulong atom = X11Native.XInternAtom(_display.Handle, "WM_TRANSIENT_FOR", 0);
+            if (atom != 0)
+            {
+                ulong value = transientFor;
+                X11Native.XChangeProperty(_display.Handle, Window, atom,
+                    X11Native.XA_WINDOW, 32, X11Native.PropModeReplace, ref value, 1);
+            }
+        }
+        if (dialog)
+        {
+            ulong type = X11Native.XInternAtom(_display.Handle, "_NET_WM_WINDOW_TYPE_DIALOG", 0);
+            if (type != 0 && _display.AtomNetWmWindowType != 0)
+            {
+                X11Native.XChangeProperty(_display.Handle, Window, _display.AtomNetWmWindowType,
+                    X11Native.XA_ATOM, 32, X11Native.PropModeReplace, ref type, 1);
+            }
+        }
+    }
+
+    private void SetFullscreenProperty(bool enabled)
+    {
+        if (enabled)
+        {
+            if (_fullscreenAtom == 0) return;
+            ulong atom = _fullscreenAtom;
+            X11Native.XChangeProperty(_display.Handle, Window, _display.AtomNetWmState,
+                X11Native.XA_ATOM, 32, X11Native.PropModeReplace, ref atom, 1);
+        }
+        else
+        {
+            X11Native.XDeleteProperty(_display.Handle, Window, _display.AtomNetWmState);
+        }
+    }
+
+    public void SetFullscreen(bool fullscreen)
+    {
+        if (_disposed || _fullscreen == fullscreen) return;
+        _fullscreen = fullscreen;
+        SetFullscreenProperty(fullscreen);
+        SendWmState(fullscreen);
+        if (fullscreen)
+        {
+            X11Native.XMoveResizeWindow(_display.Handle, Window,
+                _monitor.X, _monitor.Y, (uint)_monitor.Width, (uint)_monitor.Height);
+            X = _monitor.X;
+            Y = _monitor.Y;
+            _width = _monitor.Width;
+            _height = _monitor.Height;
+        }
+        else
+        {
+            X = _monitor.X + (_monitor.Width - _originalWidth) / 2;
+            Y = _monitor.Y + (_monitor.Height - _originalHeight) / 2;
+            _width = _originalWidth;
+            _height = _originalHeight;
+            X11Native.XMoveResizeWindow(_display.Handle, Window, X, Y,
+                (uint)_width, (uint)_height);
+        }
+        _display.Sync();
+        Pump();
+        UpdateGeometry();
+    }
+
+    private void SendWmState(bool enabled)
+    {
+        if (_fullscreenAtom == 0) return;
+        var ev = new X11Native.XClientMessageEvent
+        {
+            Type = X11Native.ClientMessage,
+            SendEvent = 1,
+            Display = _display.Handle,
+            Window = Window,
+            MessageType = _display.AtomNetWmState,
+            Format = 32,
+            Data0 = enabled ? 1 : 0,
+            Data1 = (long)_fullscreenAtom,
+            Data3 = 1
+        };
+        X11Native.XSendEvent(_display.Handle, _display.Root, 0,
+            X11Native.SubstructureRedirectMask | X11Native.SubstructureNotifyMask, ref ev);
+        _display.Flush();
+    }
+
+    public void SetOriginalSize(int width, int height)
+    {
+        _originalWidth = Math.Max(64, width);
+        _originalHeight = Math.Max(64, height);
+        if (!_fullscreen)
+        {
+            X = _monitor.X + (_monitor.Width - _originalWidth) / 2;
+            Y = _monitor.Y + (_monitor.Height - _originalHeight) / 2;
+            _width = _originalWidth;
+            _height = _originalHeight;
+            X11Native.XMoveResizeWindow(_display.Handle, Window, X, Y,
+                (uint)_width, (uint)_height);
+            _display.Sync();
+            UpdateGeometry();
+        }
+    }
+
+    private void UpdateGeometry()
+    {
+        if (_disposed) return;
+        if (X11Native.XGetGeometry(_display.Handle, Window, out _, out _, out _,
+                out uint w, out uint h, out _, out _) != 0)
+        {
+            if (w > 0) _width = (int)w;
+            if (h > 0) _height = (int)h;
+        }
+    }
+
+    public void Focus()
+    {
+        if (_disposed) return;
+        X11Native.XSetInputFocus(_display.Handle, Window, X11Native.RevertToParent, 0);
+        Activate();
+        _display.Sync();
+    }
+
+    public void Show()
+    {
+        if (_disposed) return;
+        if (!IsVisible)
+        {
+            X11Native.XMapRaised(_display.Handle, Window);
+            IsVisible = true;
+        }
+        else
+        {
+            X11Native.XRaiseWindow(_display.Handle, Window);
+        }
+        Activate();
+        _display.Sync();
+    }
+
+    /// <summary>
+    /// Ask KWin to make this a real active window, not merely an X input-focus
+    /// change. XSetInputFocus alone can leave a newly mapped host behind a
+    /// native Wayland window that KWin considers active.
+    /// </summary>
+    public void Activate()
+    {
+        if (_disposed) return;
+        var ev = new X11Native.XClientMessageEvent
+        {
+            Type = X11Native.ClientMessage,
+            SendEvent = 1,
+            Display = _display.Handle,
+            Window = Window,
+            MessageType = _display.AtomNetActiveWindow,
+            Format = 32,
+            Data0 = 1, // source indication: application
+            Data1 = 0, // CurrentTime
+            Data2 = 0
+        };
+        X11Native.XSendEvent(_display.Handle, _display.Root, 0,
+            X11Native.SubstructureRedirectMask | X11Native.SubstructureNotifyMask, ref ev);
+        _display.Flush();
+    }
+
+    public void Raise()
+    {
+        if (_disposed) return;
+        X11Native.XRaiseWindow(_display.Handle, Window);
+        _display.Sync();
+    }
+
+    public void SetTitle(string title)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(title)) return;
+
+        // XStoreName sets WM_NAME as STRING (Latin-1), which turns Chinese
+        // game titles into mojibake. KWin uses _NET_WM_NAME in UTF8_STRING.
+        byte[] utf8 = Encoding.UTF8.GetBytes(title);
+        if (_display.AtomNetWmName != 0 && _display.AtomUtf8String != 0)
+        {
+            X11Native.XChangeProperty(_display.Handle, Window, _display.AtomNetWmName,
+                _display.AtomUtf8String, 8, X11Native.PropModeReplace, utf8, utf8.Length);
+        }
+        X11Native.XStoreName(_display.Handle, Window, title);
+        _display.Sync();
+    }
+
+    public void Hide()
+    {
+        if (_disposed || !IsVisible) return;
+        X11Native.XUnmapWindow(_display.Handle, Window);
+        _display.Sync();
+        IsVisible = false;
+    }
+
+    public void Pump()
+    {
+        if (_disposed) return;
+        try
+        {
+            while (X11Native.XPending(_display.Handle) > 0)
+            {
+                var ev = default(X11Native.XEvent);
+                X11Native.XNextEvent(_display.Handle, ref ev);
+                switch (ev.Type)
+                {
+                    case X11Native.FocusIn:
+                        if (!_focused) { _focused = true; FocusChanged?.Invoke(true); }
+                        break;
+                    case X11Native.FocusOut:
+                        if (_focused) { _focused = false; FocusChanged?.Invoke(false); }
+                        break;
+                    case X11Native.ConfigureNotify:
+                        UpdateGeometry();
+                        break;
+                    case X11Native.MotionNotify:
+                        Pointer?.Invoke(new OverlayPointerEvent(OverlayPointerKind.Motion, ev.X, ev.Y));
+                        break;
+                    case X11Native.EnterNotify:
+                        Pointer?.Invoke(new OverlayPointerEvent(OverlayPointerKind.Enter, ev.X, ev.Y));
+                        break;
+                    case X11Native.LeaveNotify:
+                        Pointer?.Invoke(new OverlayPointerEvent(OverlayPointerKind.Leave, 0, 0));
+                        break;
+                    case X11Native.ButtonPress:
+                    case X11Native.ButtonRelease:
+                    {
+                        bool pressed = ev.Type == X11Native.ButtonPress;
+                        int button = (int)ev.Detail;
+                        OverlayPointerKind kind = button switch
+                        {
+                            4 => OverlayPointerKind.WheelUp,
+                            5 => OverlayPointerKind.WheelDown,
+                            _ => pressed ? OverlayPointerKind.ButtonPress : OverlayPointerKind.ButtonRelease
+                        };
+                        int mapped = button is 4 or 5 ? 0 : button switch
+                        {
+                            2 => 2,
+                            3 => 3,
+                            _ => 1
+                        };
+                        Log.Debug($"nested host button type={ev.Type} detail={button} " +
+                                  $"mapped={mapped} at={ev.X},{ev.Y}");
+                        Pointer?.Invoke(new OverlayPointerEvent(kind, ev.X, ev.Y, mapped));
+                        break;
+                    }
+                    case X11Native.KeyPress:
+                    case X11Native.KeyRelease:
+                    {
+                        int keycode = (int)ev.Detail - 8;
+                        if (keycode > 0)
+                        {
+                            Modifiers?.Invoke(new OverlayModifiers((int)ev.State, 0, 0, 0));
+                            Key?.Invoke(new OverlayKeyEvent(keycode,
+                                ev.Type == X11Native.KeyPress ? OverlayKeyState.Pressed : OverlayKeyState.Released));
+                        }
+                        break;
+                    }
+                    case X11Native.ClientMessage:
+                    {
+                        // XEvent.Detail is at the offset of data.l[3], not
+                        // data.l[0]. Overlay the larger client-message struct
+                        // so WM_DELETE_WINDOW (data.l[0]) is read correctly.
+                        var client = Unsafe.As<X11Native.XEvent,
+                            X11Native.XClientMessageEvent>(ref ev);
+                        if (client.MessageType == _wmProtocolsAtom &&
+                            (ulong)client.Data0 == _deleteWindowAtom)
+                            CloseRequested?.Invoke();
+                        break;
+                    }
+                    case 17: // DestroyNotify
+                        Closed?.Invoke();
+                        break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"nested host window pump failed: {ex.Message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        IsVisible = false;
+        try
+        {
+            if (Window != 0) X11Native.XDestroyWindow(_display.Handle, Window);
+            _display.Sync();
+        }
+        catch { }
+        _display.Dispose();
+    }
+}

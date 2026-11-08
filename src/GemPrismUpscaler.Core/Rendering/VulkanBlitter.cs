@@ -67,6 +67,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private int _sourceHeight;
     private int _sourceStride;
     private ImageLayout _sourceLayout = ImageLayout.Undefined;
+    private readonly Format _sourceFormat;
     private Anime4KChain? _anime4k;
     private LanczosPresenter? _presenter;
     private QueryPool _timestampPool;
@@ -96,19 +97,19 @@ public sealed unsafe class VulkanBlitter : IDisposable
     public int DirtyHalo => _anime4k?.Radius ?? 0;
 
     public VulkanBlitter(X11Display display, ulong window, int outputWidth, int outputHeight,
-        EffectDefinition? effect = null)
-        : this(display, window, IntPtr.Zero, IntPtr.Zero, outputWidth, outputHeight, effect)
+        EffectDefinition? effect = null, bool sourceRgb = false)
+        : this(display, window, IntPtr.Zero, IntPtr.Zero, outputWidth, outputHeight, effect, sourceRgb)
     {
     }
 
     public VulkanBlitter(IntPtr wlDisplay, IntPtr wlSurface, int outputWidth, int outputHeight,
-        EffectDefinition? effect = null)
-        : this(null, 0, wlDisplay, wlSurface, outputWidth, outputHeight, effect)
+        EffectDefinition? effect = null, bool sourceRgb = false)
+        : this(null, 0, wlDisplay, wlSurface, outputWidth, outputHeight, effect, sourceRgb)
     {
     }
 
     private VulkanBlitter(X11Display? display, ulong window, IntPtr wlDisplay, IntPtr wlSurface,
-        int outputWidth, int outputHeight, EffectDefinition? effect)
+        int outputWidth, int outputHeight, EffectDefinition? effect, bool sourceRgb)
     {
         _display = display;
         _window = window;
@@ -118,6 +119,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         _outputWidth = outputWidth;
         _outputHeight = outputHeight;
         _effect = effect ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
+        _sourceFormat = sourceRgb ? Format.R8G8B8A8Unorm : Format.B8G8R8A8Unorm;
         CreateInstance();
         CreateSurface();
         PickDevice();
@@ -351,16 +353,35 @@ public sealed unsafe class VulkanBlitter : IDisposable
         _surfaceExt.GetPhysicalDeviceSurfaceFormats(_physicalDevice, _surface, &formatCount, null);
         var formats = stackalloc SurfaceFormatKHR[(int)formatCount];
         _surfaceExt.GetPhysicalDeviceSurfaceFormats(_physicalDevice, _surface, &formatCount, formats);
+        // Prefer an SDR 8-bit BGRA surface. On an HDR-enabled KDE output the
+        // first B8G8R8A8 format can be paired with a linear/HDR color space;
+        // using it for the nested SDR capture would wash out or shift colors.
         SurfaceFormatKHR chosen = formats[0];
+        bool exact = false;
         for (int i = 0; i < formatCount; i++)
         {
-            if (formats[i].Format == Format.B8G8R8A8Unorm)
+            if (formats[i].Format == Format.B8G8R8A8Unorm &&
+                (int)formats[i].ColorSpace == 0 /* VK_COLOR_SPACE_SRGB_NONLINEAR_KHR */)
             {
                 chosen = formats[i];
+                exact = true;
                 break;
             }
         }
+        if (!exact)
+        {
+            for (int i = 0; i < formatCount; i++)
+            {
+                if (formats[i].Format == Format.B8G8R8A8Unorm)
+                {
+                    chosen = formats[i];
+                    break;
+                }
+            }
+        }
         _swapchainFormat = chosen.Format;
+        Log.Info($"swapchain format={chosen.Format} colorSpace={chosen.ColorSpace} " +
+                 $"exactSdr={exact}");
 
         PresentModeKHR presentMode = PresentModeKHR.FifoKhr;
         Log.Info("swapchain present mode=PresentModeFifoKhr");
@@ -644,7 +665,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
         {
             SType = StructureType.ImageCreateInfo,
             ImageType = ImageType.Type2D,
-            Format = Format.B8G8R8A8Unorm,
+            Format = _sourceFormat,
             Extent = new Extent3D((uint)width, (uint)height, 1),
             MipLevels = 1,
             ArrayLayers = 1,
@@ -670,7 +691,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
             SType = StructureType.ImageViewCreateInfo,
             Image = _sourceImage,
             ViewType = ImageViewType.Type2D,
-            Format = Format.B8G8R8A8Unorm,
+            Format = _sourceFormat,
             SubresourceRange = new ImageSubresourceRange
             {
                 AspectMask = ImageAspectFlags.ColorBit,

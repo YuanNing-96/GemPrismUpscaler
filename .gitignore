@@ -97,3 +97,7 @@ tools/zero-copy/dri3-vulkan-import
 # agent输出的临时文档区，便于开发
 # =========================
 .agent
+
+tools/gemprism-vkeyboard
+tools/gemprism-vkeyboard-protocol.c
+tools/gemprism-vkeyboard-protocol.h

@@ -294,11 +294,15 @@ mode = "auto"        # auto | passthrough | forward
 
 ## 6. M2b · 嵌套合成器（M2b 阶段实施）
 
-### 6.0 实施状态（2026-11-08）
+### 6.0 实施状态（2026-11-08 18:54）
 
-- M2a 已完成并推送 `cd9d9b8`；M2b 尚未开始代码。
-- 当前第一步是 **B0 spike**：headless sway、`wlr-screencopy`、`wlr-virtual-pointer`、虚拟键盘、`swaymsg get_tree`。
-- 详细可执行交接（B0 命令、B1–B5、风险、第一步）见 `.agent/M2b-开发交接.md`。
+- M2a 已完成并推送 `cd9d9b8`；M2bα 第一版功能已实现，等待用户验收（nested/抓帧/overlay/2D 输入/动态分辨率；测试 113/113）。
+- **B0 已通过**：headless sway 1.12、screencopy、virtual pointer、虚拟键盘、`swaymsg get_tree`。
+- **B0.5 已完成主要验证**：固定 sway 1.12 构建成功；虚拟指针无 XInput2 raw；nested XWayland XTest 能产生 raw；uinput/libinput 因 libseat 被 KDE 会话占用而不可直接用。
+- **最终架构**：所有新启动游戏默认进 nested sway；旧 M2a X11/portal 保留回退。M2b 拆为 **α（嵌套平台+2D+动态分辨率）/ β1（patched sway+指针锁定/relative）/ β2（raw+终末地）**。
+- **分辨率策略**：nested 输出跟随游戏 `geometry`，不固定 1280×720；4:3/16:9/多分辨率动态 resize。
+- **raw 策略**：XWayland 用 nested XTest；原生 Wayland 用 virtual pointer relative；uinput 仅兜底；**禁止宿主 XTest**（会触发 KDE EIS 授权）。
+- 详细计划和证据见 `.agent/M2b-αβ-实施计划.md`、`.agent/M2b-开发记录.md`；原 B0/B1–B5 交接见 `.agent/M2b-开发交接.md`。
 - 用户约定：M2b 只做主路径，不创建 goal，用 plan/todo；不做 promote/改源窗口状态。
 
 ### 6.1 目标

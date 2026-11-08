@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
+using Microsoft.Win32.SafeHandles;
 using NWayland;
 using NWayland.Protocols.FractionalScaleV1;
 using NWayland.Protocols.Viewporter;
@@ -48,6 +49,7 @@ public sealed class WaylandOverlay : IOverlay
     private ZxdgOutputManagerV1? _xdgOutputManager;
     private WlSeat? _seat;
     private WlPointer? _pointer;
+    private WlKeyboard? _keyboard;
     private WlSurface? _surface;
     private ZwlrLayerSurfaceV1? _layerSurface;
     private WlRegion? _inputRegion;
@@ -60,11 +62,13 @@ public sealed class WaylandOverlay : IOverlay
     private readonly LayerSurfaceListener _layerSurfaceListener = new();
     private readonly SeatListener _seatListener = new();
     private readonly PointerListener _pointerListener = new();
+    private readonly KeyboardListener _keyboardListener = new();
     private readonly FractionalScaleListener _fractionalScaleListener = new();
 
     private bool _configured;
     private bool _visible = true;
     private bool _pointerForwarding;
+    private bool _keyboardForwarding;
     private bool _disposed;
     private bool _selectedMissing;
     private bool _outputsChanged;
@@ -90,6 +94,11 @@ public sealed class WaylandOverlay : IOverlay
     public IntPtr VulkanSurface => _surface?.Handle ?? IntPtr.Zero;
 
     public event Action<OverlayPointerEvent>? Pointer;
+    public event Action<byte[]>? Keymap;
+    public event Action<OverlayKeyEvent>? Key;
+    public event Action<OverlayModifiers>? Modifiers;
+    /// <summary>Keyboard focus left the overlay (for example KDE Alt+Tab).</summary>
+    public event Action? KeyboardLeft;
 
     public bool IsConfigured => _configured;
     public bool SelectedOutputMissing => _selectedMissing;
@@ -135,6 +144,10 @@ public sealed class WaylandOverlay : IOverlay
         _layerSurfaceListener.ClosedEvent = () => _closed = true;
         _seatListener.CapabilitiesChanged = OnSeatCapabilities;
         _pointerListener.Event = OnPointerEvent;
+        _keyboardListener.KeymapEvent += data => Keymap?.Invoke(data);
+        _keyboardListener.KeyEvent += e => Key?.Invoke(e);
+        _keyboardListener.ModifiersEvent += m => Modifiers?.Invoke(m);
+        _keyboardListener.LeaveEvent += () => KeyboardLeft?.Invoke();
         _fractionalScaleListener.ScaleChanged = scale => _fractionalScaleScale = scale / 120.0;
 
         _display = WlDisplay.Connect(null, new WlDisplayOptions());
@@ -353,17 +366,35 @@ public sealed class WaylandOverlay : IOverlay
         {
             _pointer?.Dispose();
             _pointer = null;
-            return;
+        }
+        else if (_pointerForwarding && _pointer is null)
+        {
+            try
+            {
+                _pointer = _seat?.GetPointer(_pointerListener, null);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"wayland pointer unavailable: {ex.Message}");
+            }
         }
 
-        if (!_pointerForwarding || _pointer is not null) return;
-        try
+        bool hasKeyboard = (capabilities & WlSeat.CapabilityEnum.Keyboard) != 0;
+        if (!hasKeyboard)
         {
-            _pointer = _seat?.GetPointer(_pointerListener, null);
+            _keyboard?.Dispose();
+            _keyboard = null;
         }
-        catch (Exception ex)
+        else if (_keyboardForwarding && _keyboard is null)
         {
-            Log.Warn($"wayland pointer unavailable: {ex.Message}");
+            try
+            {
+                _keyboard = _seat?.GetKeyboard(_keyboardListener, null);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"wayland keyboard unavailable: {ex.Message}");
+            }
         }
     }
 
@@ -449,6 +480,43 @@ public sealed class WaylandOverlay : IOverlay
         }
     }
 
+    public void SetKeyboardForwarding(bool enabled)
+    {
+        _keyboardForwarding = enabled;
+        if (!enabled)
+        {
+            _keyboard?.Dispose();
+            _keyboard = null;
+            SetKeyboardInteractivity(ZwlrLayerSurfaceV1.KeyboardInteractivityEnum.None);
+            return;
+        }
+
+        if (_seat is null) return;
+        try
+        {
+            _keyboard ??= _seat.GetKeyboard(_keyboardListener, null);
+            SetKeyboardInteractivity(ZwlrLayerSurfaceV1.KeyboardInteractivityEnum.Exclusive);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"wayland keyboard unavailable: {ex.Message}");
+        }
+    }
+
+    private void SetKeyboardInteractivity(ZwlrLayerSurfaceV1.KeyboardInteractivityEnum mode)
+    {
+        try
+        {
+            _layerSurface?.SetKeyboardInteractivity(mode);
+            _surface?.Commit();
+            _display.Flush();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"wayland keyboard interactivity failed: {ex.Message}");
+        }
+    }
+
     public void Show()
     {
         if (_disposed || _visible) return;
@@ -466,6 +534,8 @@ public sealed class WaylandOverlay : IOverlay
             _layerSurface?.SetMargin(0, 0, 0, 0);
             _layerSurface?.SetLayer(ZwlrLayerShellV1.LayerEnum.Overlay);
             _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
+            if (_keyboardForwarding)
+                _layerSurface?.SetKeyboardInteractivity(ZwlrLayerSurfaceV1.KeyboardInteractivityEnum.Exclusive);
             _surface?.Commit();
             _display.Flush();
         }
@@ -511,6 +581,8 @@ public sealed class WaylandOverlay : IOverlay
             _layerSurface?.SetMargin(0, 0, 0, OffscreenRightMargin());
             _layerSurface?.SetLayer(ZwlrLayerShellV1.LayerEnum.Overlay);
             _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
+            if (_keyboardForwarding)
+                _layerSurface?.SetKeyboardInteractivity(ZwlrLayerSurfaceV1.KeyboardInteractivityEnum.None);
             _surface?.Commit();
             _display.Flush();
         }
@@ -643,6 +715,57 @@ public sealed class WaylandOverlay : IOverlay
             0x114 => 9, // BTN_EXTRA
             _ => 1
         };
+    }
+
+    private sealed class KeyboardListener : WlKeyboard.Listener
+    {
+        public Action<byte[]>? KeymapEvent;
+        public Action<OverlayKeyEvent>? KeyEvent;
+        public Action<OverlayModifiers>? ModifiersEvent;
+        public Action? LeaveEvent;
+
+        protected override void Enter(WlKeyboard eventSender, uint serial, WlSurface? surface,
+            ReadOnlySpan<byte> keys)
+        { }
+
+        protected override void Leave(WlKeyboard eventSender, uint serial, WlSurface? surface)
+            => LeaveEvent?.Invoke();
+
+        protected override void Keymap(WlKeyboard eventSender, WlKeyboard.KeymapFormatEnum format,
+            WaylandFd fd, uint size)
+        {
+            if (format != WlKeyboard.KeymapFormatEnum.XkbV1 || size == 0) return;
+            try
+            {
+                int rawFd = fd.Consume();
+                using var handle = new SafeFileHandle((IntPtr)rawFd, ownsHandle: true);
+                using var stream = new FileStream(handle, FileAccess.Read);
+                byte[] data = new byte[size];
+                stream.ReadExactly(data);
+                KeymapEvent?.Invoke(data);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"wayland keymap read failed: {ex.Message}");
+            }
+        }
+
+        protected override void Key(WlKeyboard eventSender, uint serial, uint time, uint key,
+            WlKeyboard.KeyStateEnum state)
+        {
+            var value = state switch
+            {
+                WlKeyboard.KeyStateEnum.Pressed => OverlayKeyState.Pressed,
+                WlKeyboard.KeyStateEnum.Repeated => OverlayKeyState.Repeated,
+                _ => OverlayKeyState.Released
+            };
+            KeyEvent?.Invoke(new OverlayKeyEvent((int)key, value));
+        }
+
+        protected override void Modifiers(WlKeyboard eventSender, uint serial, uint depressed,
+            uint latched, uint locked, uint group)
+            => ModifiersEvent?.Invoke(new OverlayModifiers(
+                (int)depressed, (int)latched, (int)locked, (int)group));
     }
 
     private sealed class OutputEntry

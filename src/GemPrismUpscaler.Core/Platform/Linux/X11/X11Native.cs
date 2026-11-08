@@ -23,6 +23,8 @@ internal static unsafe class X11Native
     public const long LeaveWindowMask = 1L << 5;
     public const long PointerMotionMask = 1L << 6;
     public const long KeyPressMask = 1L << 0;
+    public const long KeyReleaseMask = 1L << 1;
+    public const long FocusChangeMask = 1L << 21;
     public const long ExposureMask = 1L << 15;
     public const long StructureNotifyMask = 1L << 17;
     public const long SubstructureNotifyMask = 1L << 19;
@@ -50,7 +52,19 @@ internal static unsafe class X11Native
     public const int NotifyNonlinear = 3;
     public const int EnterNotify = 7;
     public const int LeaveNotify = 8;
+    public const int FocusIn = 9;
+    public const int FocusOut = 10;
+    public const int MapNotify = 19;
+    public const int ConfigureNotify = 22;
     public const int ClientMessage = 33;
+    public const int ButtonPress = 4;
+    public const int ButtonRelease = 5;
+    public const int MotionNotify = 6;
+    public const int KeyPress = 2;
+    public const int KeyRelease = 3;
+    public const ulong XA_ATOM = 4;
+    public const ulong XA_WINDOW = 33;
+    public const int PropModeReplace = 0;
 
     public const ulong XK_A = 0x0061;
     public const ulong XK_Escape = 0xFF1B;
@@ -288,7 +302,17 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XDestroyWindow(IntPtr display, ulong window);
     [DllImport(X11)] public static extern int XStoreName(IntPtr display, ulong window, [MarshalAs(UnmanagedType.LPStr)] string name);
     [DllImport(X11)] public static extern int XSetWMHints(IntPtr display, ulong window, ref XWMHints hints);
+    [DllImport(X11)] public static extern int XChangeProperty(IntPtr display, ulong window, ulong property,
+        ulong type, int format, int mode, ref ulong data, int nelements);
+    [DllImport(X11)] public static extern int XChangeProperty(IntPtr display, ulong window, ulong property,
+        ulong type, int format, int mode, byte[] data, int nelements);
+    [DllImport(X11)] public static extern int XMoveResizeWindow(IntPtr display, ulong window,
+        int x, int y, uint width, uint height);
+    [DllImport(X11)] public static extern int XDeleteProperty(IntPtr display, ulong window, ulong property);
     [DllImport(X11)] public static extern int XSync(IntPtr display, int discard);
+    [DllImport(X11)] public static extern int XWarpPointer(IntPtr display, ulong srcW, ulong destW,
+        int srcX, int srcY, int srcWidth, int srcHeight, int destX, int destY);
+
     [DllImport(X11)] public static extern IntPtr XGetImage(IntPtr display, ulong drawable, int x, int y, uint width, uint height, ulong planeMask, int format);
     [DllImport(X11)] public static extern int XDestroyImage(IntPtr image);
     [DllImport(X11)] public static extern int XFlush(IntPtr display);

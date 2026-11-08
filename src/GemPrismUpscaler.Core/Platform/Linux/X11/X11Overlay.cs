@@ -27,9 +27,28 @@ public sealed class X11Overlay : IOverlay
         remove { }
     }
 
+    public event Action<byte[]>? Keymap
+    {
+        add { }
+        remove { }
+    }
+
+    public event Action<OverlayKeyEvent>? Key
+    {
+        add { }
+        remove { }
+    }
+
+    public event Action<OverlayModifiers>? Modifiers
+    {
+        add { }
+        remove { }
+    }
+
     public void Pump(int timeoutMs) { }
     public void SetInputRegion(RectI? physicalRect) { }
     public void SetPointerForwarding(bool enabled) { }
+    public void SetKeyboardForwarding(bool enabled) { }
 
     public X11Overlay(X11Display display, int x, int y, int width, int height)
     {

@@ -4,6 +4,7 @@ using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Nested;
 using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
@@ -23,6 +24,7 @@ sealed class Program
     internal static AppConfig Config { get; private set; } = AppConfig.CreateDefault();
 
     private static bool _configLoaded;
+    private static volatile bool _nestedStopRequested;
 
     [STAThread]
     public static void Main(string[] args)
@@ -50,6 +52,7 @@ sealed class Program
 
         if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" ||
                                 args[0] == "--portal-window" || args[0] == "--portal-monitor" ||
+                                args[0] == "--nested" || args[0] == "--nested-session" ||
                                 args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
@@ -131,6 +134,11 @@ sealed class Program
                 PrintUsage();
                 return 0;
             }
+
+            if (args[0] == "--nested")
+                return RunNested(args);
+            if (args[0] == "--nested-session")
+                return RunNestedSession(args);
 
             if (args.Any(a => a == "--portal-window" || a == "--portal-monitor"))
                 return RunPortal(args);
@@ -307,6 +315,190 @@ sealed class Program
         };
     }
 
+    private static NestedMonitorInfo ResolveNestedMonitor(string[] args)
+    {
+        EnsureConfiguration(args);
+        string? requested = GetOption(args, "--monitor");
+        if (string.IsNullOrWhiteSpace(requested) &&
+            !string.Equals(Config.Display.Monitor, "auto", StringComparison.OrdinalIgnoreCase))
+            requested = Config.Display.Monitor;
+        if (string.IsNullOrWhiteSpace(requested))
+            throw new InvalidOperationException(
+                "--monitor is required for nested; use --list to see monitor names");
+        var monitor = NestedMonitor.Resolve(requested);
+        string? oldSize = GetOption(args, "--nested-size");
+        if (!string.IsNullOrWhiteSpace(oldSize))
+            Console.WriteLine($"nested: --nested-size {oldSize} ignored; " +
+                              $"nested desktop follows monitor '{monitor.Name}' " +
+                              $"{monitor.Width}x{monitor.Height}");
+        return monitor;
+    }
+
+    private static int RunNested(string[] args)
+    {
+        int separator = Array.IndexOf(args, "--");
+        if (separator < 0 || separator == args.Length - 1)
+        {
+            Console.Error.WriteLine("usage: GemPrismUpscaler --nested [--monitor NAME] -- <command...>");
+            return 2;
+        }
+
+        NestedMonitorInfo monitor;
+        try { monitor = ResolveNestedMonitor(args); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"nested monitor error: {ex.Message}");
+            return 1;
+        }
+        int width = monitor.Width, height = monitor.Height;
+
+        string swayPath = GetOption(args, "--sway") ?? NestedSession.ResolveSwayPath();
+        string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
+        string[] command = args[(separator + 1)..];
+
+        using var session = new NestedSession(swayPath, command, width, height, swayMsgPath);
+        NestedUpscaleSession? nestedSession = null;
+        _nestedStopRequested = false;
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+        {
+            ctx.Cancel = true;
+            // Do not join/dispose from the signal thread. Let the main loop
+            // stop the presentation layer before the nested compositor and
+            // its XWayland server are torn down.
+            _nestedStopRequested = true;
+        });
+        using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx =>
+        {
+            ctx.Cancel = true;
+            _nestedStopRequested = true;
+        });
+
+        try
+        {
+            EnsureConfiguration(args);
+            if (!TryEffectFromArgs(args, out var effect, out string? effectError))
+            {
+                Console.Error.WriteLine(effectError);
+                return 2;
+            }
+            var mode = args.Any(a => a == "--stretch") ||
+                       string.Equals(Config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+                ? ScalingMode.Stretch
+                : ScalingMode.Fit;
+            string monitorName = monitor.Name;
+
+            session.Start();
+            session.StartCommand();
+            Console.WriteLine($"nested running; wayland={session.WaylandDisplay}; " +
+                              $"display={session.Display}; swaysock={session.SwaySocket}; " +
+                              $"token={session.Token}");
+
+            nestedSession = new NestedUpscaleSession(session, mode, effect, monitorName,
+                waitForCommand: true, preferredMain: GetOption(args, "--nested-main"));
+            nestedSession.Message += m => Console.WriteLine(m);
+            nestedSession.Start();
+            Console.WriteLine($"nested upscale running; overlay={nestedSession.OverlayDescription}; " +
+                              $"effect={nestedSession.EffectName}; Ctrl+C to stop");
+
+            while (nestedSession.IsRunning && !_nestedStopRequested) Thread.Sleep(100);
+            nestedSession.Stop();
+            Console.WriteLine($"nested stopped: {nestedSession.ExitReason}");
+            return session.CommandExitCode;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"nested fatal: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"nested failed: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { nestedSession?.Stop(); }
+            catch (Exception ex) { Log.Warn($"nested session stop failed: {ex.Message}"); }
+            session.Stop();
+        }
+    }
+
+    private static int RunNestedSession(string[] args)
+    {
+        NestedMonitorInfo monitor;
+        try { monitor = ResolveNestedMonitor(args); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"nested monitor error: {ex.Message}");
+            return 1;
+        }
+        int width = monitor.Width, height = monitor.Height;
+
+        string swayPath = GetOption(args, "--sway") ?? NestedSession.ResolveSwayPath();
+        string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
+        // The command is unused in session mode but NestedSession keeps one
+        // command slot for the one-shot path. It is never started here.
+        using var session = new NestedSession(swayPath, new[] { "true" }, width, height, swayMsgPath);
+        NestedUpscaleSession? nestedSession = null;
+        _nestedStopRequested = false;
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+        {
+            ctx.Cancel = true;
+            // Do not join/dispose from the signal thread. Let the main loop
+            // stop the presentation layer before the nested compositor and
+            // its XWayland server are torn down.
+            _nestedStopRequested = true;
+        });
+        using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx =>
+        {
+            ctx.Cancel = true;
+            _nestedStopRequested = true;
+        });
+
+        try
+        {
+            EnsureConfiguration(args);
+            if (!TryEffectFromArgs(args, out var effect, out string? effectError))
+            {
+                Console.Error.WriteLine(effectError);
+                return 2;
+            }
+            var mode = args.Any(a => a == "--stretch") ||
+                       string.Equals(Config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+                ? ScalingMode.Stretch
+                : ScalingMode.Fit;
+            string monitorName = monitor.Name;
+
+            session.Start();
+            var state = new NestedSessionState(session.SwayPid, session.WaylandDisplay!,
+                session.Display!, session.SwaySocket!, session.Token, width, height);
+            state.Write();
+            Console.WriteLine($"nested session running; state={NestedSessionState.DefaultPath}");
+            Console.WriteLine($"  WAYLAND_DISPLAY={session.WaylandDisplay}");
+            Console.WriteLine($"  DISPLAY={session.Display}");
+            Console.WriteLine($"  SWAYSOCK={session.SwaySocket}");
+            Console.WriteLine($"  GEMPRISM_NESTED_TOKEN={session.Token}");
+            Console.WriteLine("launch a game with: tools/gemprism-nested-run -- <command...>");
+
+            nestedSession = new NestedUpscaleSession(session, mode, effect, monitorName,
+                waitForCommand: false, preferredMain: GetOption(args, "--nested-main"));
+            nestedSession.Message += m => Console.WriteLine(m);
+            nestedSession.Start();
+            while (nestedSession.IsRunning && !_nestedStopRequested) Thread.Sleep(100);
+            nestedSession.Stop();
+            Console.WriteLine($"nested session stopped: {nestedSession.ExitReason}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"nested session fatal: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"nested session failed: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { nestedSession?.Dispose(); } catch (Exception ex) { Log.Warn($"nested session dispose failed: {ex.Message}"); }
+            try { session.Stop(); } catch (Exception ex) { Log.Warn($"nested session stop failed: {ex.Message}"); }
+            try { NestedSessionState.Clear(); } catch (Exception ex) { Log.Warn($"nested state clear failed: {ex.Message}"); }
+        }
+    }
+
     private static int RunPortal(string[] args)
     {
         try
@@ -398,6 +590,10 @@ sealed class Program
               GemPrismUpscaler --window <id> [options]  start a session directly
               GemPrismUpscaler --portal-window [options] start a native Wayland portal session
               GemPrismUpscaler --portal-monitor [options] capture a monitor via portal
+              GemPrismUpscaler --nested [options] -- <command>
+                                                        run a command in private nested sway
+              GemPrismUpscaler --nested-session [options]
+                                                        keep a nested session for gemprism-nested-run
               GemPrismUpscaler --status                 query the running instance
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
@@ -425,6 +621,16 @@ sealed class Program
               --effect <id>             built-in or custom effect
               --stretch                 stretch instead of preserving aspect ratio
               --portal-reuse-token      skip the picker and reuse the last window
+
+            options for --nested / --nested-session:
+              --monitor <name>          target monitor (required for nested; desktop =
+                                        that monitor's physical resolution)
+              --sway <path>             override the pinned sway binary
+              --nested-main <pid|app_id|title>
+                                        manually select the main window
+              --nested-size <WxH>       deprecated/ignored; nested desktop follows monitor
+              --effect <id>             built-in or custom effect
+              --stretch                 stretch instead of preserving aspect ratio
             """);
     }
 

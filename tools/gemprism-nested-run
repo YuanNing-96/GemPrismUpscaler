@@ -1,0 +1,28 @@
+#!/bin/sh
+# Run a command inside the active GemPrism private nested sway session.
+# Usage: gemprism-nested-run -- <command...>
+set -eu
+
+STATE="${GEMPRISM_NESTED_STATE:-${XDG_DATA_HOME:-$HOME/.local/share}/GemPrismUpscaler/nested-session.env}"
+if [ ! -f "$STATE" ]; then
+    echo "gemprism-nested-run: no nested session state at $STATE" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+. "$STATE"
+
+if [ "${1:-}" = "--" ]; then
+    shift
+fi
+if [ "$#" -eq 0 ]; then
+    echo "usage: gemprism-nested-run -- <command...>" >&2
+    exit 2
+fi
+
+export WAYLAND_DISPLAY="$GEMPRISM_NESTED_WAYLAND"
+export DISPLAY="$GEMPRISM_NESTED_DISPLAY"
+export SWAYSOCK="$GEMPRISM_NESTED_SWAYSOCK"
+export GEMPRISM_NESTED_TOKEN="$GEMPRISM_NESTED_TOKEN"
+
+exec "$@"
