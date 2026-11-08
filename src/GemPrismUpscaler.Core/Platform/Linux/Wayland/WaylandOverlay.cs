@@ -455,21 +455,19 @@ public sealed class WaylandOverlay : IOverlay
         _visible = true;
         try
         {
-            // The layer surface was unmapped by Hide(). KWin requires a fresh
-            // configure before a buffer may be attached again; ask for one and
-            // give the compositor a bounded window to send it. If it does not
-            // arrive, proceed after the wait (KWin accepts the next attach once
-            // it has processed the unmap).
-            _configured = false;
+            // Hide() keeps the surface mapped and moves it off-screen. On show,
+            // re-anchor it to the whole output. This avoids unmapping, which
+            // makes KWin emit zwlr_layer_surface_v1.closed and reset the layer
+            // to Bottom; a re-used surface would then sit below the game.
+            _layerSurface?.SetAnchor(ZwlrLayerSurfaceV1.AnchorEnum.Top |
+                                     ZwlrLayerSurfaceV1.AnchorEnum.Bottom |
+                                     ZwlrLayerSurfaceV1.AnchorEnum.Left |
+                                     ZwlrLayerSurfaceV1.AnchorEnum.Right);
+            _layerSurface?.SetMargin(0, 0, 0, 0);
+            _layerSurface?.SetLayer(ZwlrLayerShellV1.LayerEnum.Overlay);
             _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
             _surface?.Commit();
             _display.Flush();
-
-            var deadline = Environment.TickCount64 + 500;
-            while (!_configured && Environment.TickCount64 < deadline)
-                Pump(10);
-            if (!_configured)
-                Log.Debug("wayland overlay remap: no configure, continuing");
         }
         catch (Exception ex)
         {
@@ -483,13 +481,17 @@ public sealed class WaylandOverlay : IOverlay
         _visible = false;
         try
         {
-            _surface?.Attach(null, 0, 0);
+            // Keep the surface mapped. Unmapping causes KWin to send
+            // zwlr_layer_surface_v1.closed and reset the layer to Bottom, so a
+            // later buffer attach is no longer on the Overlay layer. Moving the
+            // surface just off the left edge preserves its layer and swapchain.
+            _layerSurface?.SetAnchor(ZwlrLayerSurfaceV1.AnchorEnum.Top |
+                                     ZwlrLayerSurfaceV1.AnchorEnum.Left);
+            _layerSurface?.SetMargin(0, 0, 0, -Math.Max(1, _logicalWidth) - 1);
+            _layerSurface?.SetLayer(ZwlrLayerShellV1.LayerEnum.Overlay);
+            _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
             _surface?.Commit();
             _display.Flush();
-            // Let the compositor process the unmap before the next render
-            // attaches a buffer. Batching both into one dispatch makes KWin
-            // reject the buffer as pre-configure.
-            _display.Roundtrip();
         }
         catch (Exception ex)
         {

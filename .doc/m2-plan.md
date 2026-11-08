@@ -249,7 +249,7 @@ mode = "auto"        # auto | passthrough | forward
   - 已知：KDE 窗口捕获包含标题栏/阴影；M2a 的正式验收以全屏/无边框原生窗口为准，窗口化装饰裁剪留后续。
   - **重要限制**：KDE 的窗口流是**按输出 scale 合成后的画面**。720p 全屏游戏在 4K/150% 输出上，`pipewire caps` 是 3840×2160，不是 720p；对它做 2× 会得到 8K 中间纹理（实测 VL 10–12fps、VRAM 7.6GB、GPU 100%），且没有真实超分收益。M2a 已加保护：源尺寸 >= 输出尺寸时自动改用 bilinear 1×，避免 8K；真正的低分辨率原生源需要 M2b 嵌套合成器或改用 XWayland 窗口捕获。
 - **2026-11-08 修复与 GlobalShortcuts**：
-  - 修复 layer-shell 从隐藏恢复时的 `buffer attached prior to first configure` / `SurfaceLostKhr`：隐藏后先 roundtrip，显示时重新请求 configure 并等待；XWayland 弹窗/焦点恢复、原生 portal 收起/显示均稳定。
+  - 修复 layer-shell 从隐藏恢复时的崩溃和层级丢失：`attach(null)` 会让 KWin 发 `closed` 并把 layer 重置为 Bottom；改为不 unmap，隐藏时移到屏幕外，显示时重新锚定并声明 Overlay。XWayland 弹窗/焦点恢复、原生 portal 收起/显示均稳定且保持最上层。
   - 接入 portal GlobalShortcuts v2 + `org.freedesktop.host.portal.Registry`；自动写 user-local desktop entry；XDG trigger 使用 `ALT+SHIFT+A`。
   - 原生会话支持快捷键/托盘手动显示隐藏；原生焦点自动跟随仍不在 M2a。
 - 自动化：构建 0 warning / 0 error；测试 103/103。
