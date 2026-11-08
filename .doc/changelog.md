@@ -16,7 +16,7 @@ M2a 把呈现从 X11 override-redirect 扩展到 Wayland layer-shell，并加入
 
 ### 0.4.0 修复（2026-11-08）
 
-- **修复 layer-shell 恢复崩溃与层级丢失**：`attach(null)` 会让 KWin 发出 `zwlr_layer_surface_v1.closed` 并把 layer 重置为 Bottom；再 attach 时既可能报 `buffer attached prior to first configure` / `SurfaceLostKhr`，也会让恢复后的 overlay 落在全屏游戏下面。现在隐藏不再 unmap，而是保留 surface、清空 input region 并把它移到屏幕左侧外；显示时重新锚定整屏并重新声明 Overlay layer。弹窗/焦点恢复、原生 portal 收起/显示均正常，层级保持最上层。
+- **修复 layer-shell 恢复崩溃与层级丢失**：`attach(null)` 会让 KWin 发出 `zwlr_layer_surface_v1.closed` 并把 layer 重置为 Bottom；再 attach 时既可能报 `buffer attached prior to first configure` / `SurfaceLostKhr`，也会让恢复后的 overlay 落在全屏游戏下面。现在隐藏不再 unmap，而是保留 surface、清空 input region，并把它移到**整个逻辑桌面右侧之外**（不是当前输出左侧，否则会落到左边的 DP 上）；显示时重新锚定整屏并重新声明 Overlay layer。弹窗/焦点恢复、原生 portal 收起/显示均正常，层级保持最上层。
 - **portal 选择器默认每次弹出**：不再默认复用 `restore_token` 跳过选择器；新增 `--portal-reuse-token` 显式复用上次窗口。
 - **接入 portal GlobalShortcuts**：原生 Wayland 焦点下 `Alt+Shift+A` 也可用；通过 `org.freedesktop.host.portal.Registry` 注册 app id，并自动写入 `~/.local/share/applications/org.gemprism.GemPrismUpscaler.desktop`。KDE 的 trigger 使用 `ALT+SHIFT+A`（大写）。
 - **portal 托盘/快捷键手动收起**：原生会话支持托盘“隐藏/显示覆盖层”和 portal 快捷键；隐藏后恢复也会走新的 configure 流程。

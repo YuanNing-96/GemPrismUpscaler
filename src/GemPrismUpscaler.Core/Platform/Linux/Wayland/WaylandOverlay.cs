@@ -475,6 +475,25 @@ public sealed class WaylandOverlay : IOverlay
         }
     }
 
+    /// <summary>
+    /// Margin that places an output-anchored surface entirely to the right of
+    /// every logical output. Using the output's own width would land on an
+    /// adjacent monitor when outputs are side by side.
+    /// </summary>
+    private int OffscreenRightMargin()
+    {
+        int outputX = _output?.LogicalX ?? 0;
+        int desktopRight = 0;
+        foreach (var entry in _outputs)
+        {
+            if (entry.LogicalWidth > 0)
+                desktopRight = Math.Max(desktopRight, entry.LogicalX + entry.LogicalWidth);
+        }
+        if (desktopRight <= 0)
+            desktopRight = outputX + Math.Max(1, _logicalWidth);
+        return Math.Max(1, desktopRight + 1 - outputX);
+    }
+
     public void Hide()
     {
         if (_disposed || !_visible) return;
@@ -483,11 +502,13 @@ public sealed class WaylandOverlay : IOverlay
         {
             // Keep the surface mapped. Unmapping causes KWin to send
             // zwlr_layer_surface_v1.closed and reset the layer to Bottom, so a
-            // later buffer attach is no longer on the Overlay layer. Moving the
-            // surface just off the left edge preserves its layer and swapchain.
+            // later buffer attach is no longer on the Overlay layer. Move the
+            // surface beyond the right edge of the whole logical desktop, not
+            // just outside this output: a negative left margin lands on the
+            // monitor to the left (DP-1 next to HDMI-A-1).
             _layerSurface?.SetAnchor(ZwlrLayerSurfaceV1.AnchorEnum.Top |
                                      ZwlrLayerSurfaceV1.AnchorEnum.Left);
-            _layerSurface?.SetMargin(0, 0, 0, -Math.Max(1, _logicalWidth) - 1);
+            _layerSurface?.SetMargin(0, 0, 0, OffscreenRightMargin());
             _layerSurface?.SetLayer(ZwlrLayerShellV1.LayerEnum.Overlay);
             _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
             _surface?.Commit();
