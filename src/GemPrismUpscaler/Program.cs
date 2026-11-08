@@ -346,7 +346,12 @@ sealed class Program
 
             using (guard)
             {
-                using var session = new PortalUpscaleSession(mode, effect, monitorName, sourceType);
+                bool reuseToken = args.Any(a => a == "--portal-reuse-token");
+                var portalHotkey = HotkeyBinding.Default;
+                if (!HotkeyBinding.TryParse(Config.Hotkey.ToggleOverlay, out portalHotkey, out _))
+                    portalHotkey = HotkeyBinding.Default;
+                using var session = new PortalUpscaleSession(mode, effect, monitorName, sourceType,
+                    reuseToken, portalHotkey);
                 session.Message += m => Console.WriteLine(m);
                 using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
                 {
@@ -419,6 +424,7 @@ sealed class Program
               --monitor <name>          layer-shell output (auto by default)
               --effect <id>             built-in or custom effect
               --stretch                 stretch instead of preserving aspect ratio
+              --portal-reuse-token      skip the picker and reuse the last window
             """);
     }
 

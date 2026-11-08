@@ -30,6 +30,21 @@ public sealed record HotkeyBinding(HotkeyModifiers Modifiers, string Key)
         return string.Join('+', parts);
     }
 
+    /// <summary>
+    /// XDG shortcuts-spec trigger (e.g. "ALT+SHIFT+A"). The portal/KDE parser
+    /// is case-sensitive and rejects the "Alt" spelling used by ToString().
+    /// </summary>
+    public string ToPortalTrigger()
+    {
+        var parts = new List<string>(5);
+        if (Modifiers.HasFlag(HotkeyModifiers.Control)) parts.Add("CTRL");
+        if (Modifiers.HasFlag(HotkeyModifiers.Alt)) parts.Add("ALT");
+        if (Modifiers.HasFlag(HotkeyModifiers.Shift)) parts.Add("SHIFT");
+        if (Modifiers.HasFlag(HotkeyModifiers.Super)) parts.Add("LOGO");
+        parts.Add(Key.ToUpperInvariant());
+        return string.Join('+', parts);
+    }
+
     public static bool TryParse(string? text, out HotkeyBinding binding, out string? error)
     {
         binding = Default;

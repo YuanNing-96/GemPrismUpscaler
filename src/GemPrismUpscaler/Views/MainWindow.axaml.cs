@@ -6,6 +6,7 @@ using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
 using GemPrismUpscaler.Services;
@@ -630,7 +631,12 @@ public partial class MainWindow : Window
             return;
         }
         string? monitorName = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
-        var session = new PortalUpscaleSession(mode, effect, monitorName);
+        var portalHotkey = HotkeyBinding.Default;
+        if (!HotkeyBinding.TryParse(_config.Hotkey.ToggleOverlay, out portalHotkey, out _))
+            portalHotkey = HotkeyBinding.Default;
+        _sessionHotkey = portalHotkey.ToString();
+        var session = new PortalUpscaleSession(mode, effect, monitorName,
+            PortalSourceType.Window, reuseToken: false, portalHotkey);
         session.Message += OnSessionMessage;
         _portalSession = session;
         _runningTitle = "Wayland 窗口";

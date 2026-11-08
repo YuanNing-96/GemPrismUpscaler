@@ -156,16 +156,18 @@ monitor = "auto"
 
 ---
 
-## 6. M2a 计划新增参数（0.4.0，开发中）
+## 6. M2a 参数（0.4.0）
 
-> 以下参数在 M2a 完成后生效；具体以 `--help` 为准。
+> 以下参数已实现；具体以 `--help` 为准。
 
 | 参数 | 取值 | 说明 |
 |---|---|---|
 | `--backend <mode>` | `auto`/`x11`/`wayland` | 选择呈现/捕获平台；`auto` 按会话和源类型选择 |
 | `--capture <mode>` | `auto`/`x11`/`portal` | `x11` = XShm；`portal` = ScreenCast + PipeWire（原生 Wayland；`--window` 路径仍回退 X11，原生窗口用 `--portal-window`） |
 | `--input <mode>` | `auto`/`passthrough`/`forward` | `passthrough` = 空 input region；`forward` = 接收后 `XSendEvent` |
-| `--portal-window` | 无值 | 打开系统窗口选择器，用于原生 Wayland 窗口 |
+| `--portal-window` | 无值 | 原生 Wayland 窗口：**每次启动都打开系统选择器** |
+| `--portal-monitor` | 无值 | 原生 Wayland 显示器捕获 |
+| `--portal-reuse-token` | 无值 | 复用 `portal.token` 中的上次窗口（默认不复用，避免跳过选择器） |
 
 配置对应：
 
@@ -184,6 +186,17 @@ mode = "auto"      # auto | passthrough | forward
 - Wayland 会话 + XWayland 窗口 → X11 捕获 + Wayland overlay + `forward` 指针转发。
 - Wayland 会话 + 原生 Wayland 全屏窗口 → portal 捕获 + 空 input region 穿透。
 - 原生 Wayland 窗口化：M2a 只显示，输入映射由 M2b 嵌套解决；UI 会提示。
+- 原生 Wayland **跟随焦点**（切到其他程序自动收起）不在 M2a：portal 不提供源窗口身份/焦点；M2b 嵌套合成器解决。M2a 用 `Alt+Shift+A` 或托盘手动收起。
+- 原生 Wayland 热键：首次会话会弹 `GlobalShortcuts` 授权；KDE 若把快捷键存成 `none`，需在“系统设置 → 快捷键 → GemPrismUpscaler”里把“显示/隐藏…”设为 `Alt+Shift+A`。
+
+```bash
+# M2a 原生 Wayland：默认每次打开系统选择器
+GemPrismUpscaler --portal-window --monitor HDMI-A-1
+GemPrismUpscaler --portal-monitor --monitor HDMI-A-1
+
+# 固定复用上次选择（跳过选择器；仅在明确知道目标窗口时使用）
+GemPrismUpscaler --portal-window --monitor HDMI-A-1 --portal-reuse-token
+```
 
 ---
 
@@ -192,10 +205,6 @@ mode = "auto"      # auto | passthrough | forward
 > 以下为计划，不在 M2a 实现。
 
 ```bash
-# 原生 Wayland：打开系统选择器并超分（M2a 已实现）
-GemPrismUpscaler --portal-window --monitor HDMI-A-1
-GemPrismUpscaler --portal-monitor --monitor HDMI-A-1
-
 # 启动一个游戏/启动器到私有嵌套合成器
 GemPrismUpscaler --nested -- <command...>
 
@@ -213,7 +222,7 @@ Lutris 推荐用 per-game 环境变量/wrapper，把 `WAYLAND_DISPLAY`/`DISPLAY`
 ## 8. 常见问题
 
 - **`--list` 看不到原生 Wayland 窗口**：Wayland 没有通用窗口枚举；M2a 用 portal 系统选择器（`--portal-window`）。`--list` 只列 X11/XWayland 窗口。
-- **热键无反应**：Wayland 下依赖 portal GlobalShortcuts；不支持时 UI/日志会提示。X11/XWayland 会回退 `XGrabKey`。
+- **热键无反应**：XWayland 焦点用 `XGrabKey`；原生 Wayland 用 portal GlobalShortcuts。首次会弹授权；若 KDE 日志显示 `trigger='none'`，到“系统设置 → 快捷键 → GemPrismUpscaler”手动分配 `Alt+Shift+A`。
 - **画面静止时 fps 为 0**：预期行为；脏矩形/静止画面不重复 capture/present。
 - **4K 输出 fps 低**：先确认源窗口是否 GPU 更新（XShm 捕获可能慢）、是否开启 HDR/高刷、是否使用 VL 等重 effect；用 `--output-size` 和 `GEMPRISM_STATS` 排查。
 - **第二实例**：默认只提示错误；设置可改为激活已有 GUI；第二个 CLI 仍返回 4。

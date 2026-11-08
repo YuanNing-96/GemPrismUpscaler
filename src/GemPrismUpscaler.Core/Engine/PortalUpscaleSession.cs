@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.PipeWire;
@@ -21,14 +22,21 @@ public sealed class PortalUpscaleSession : IDisposable
     private EffectDefinition _renderEffect;
     private readonly string? _monitorName;
     private readonly PortalSourceType _sourceType;
+    private readonly bool _reuseToken;
+    private readonly HotkeyBinding _hotkeyBinding;
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _started = new(false);
     private WaylandOverlay? _overlay;
     private VulkanBlitter? _blitter;
     private PortalScreenCastClient? _portal;
     private PortalScreenCastSession? _session;
+    private PortalGlobalShortcuts? _shortcuts;
+    private Task? _shortcutTask;
     private PipeWireGstCapture? _capture;
     private byte[] _frame = Array.Empty<byte>();
+    private bool _hasFrame;
+    private bool _forceRender;
+    private int _toggleRequested;
     private long _lastSequence = -1;
     private volatile bool _stop;
     private bool _disposed;
@@ -37,6 +45,7 @@ public sealed class PortalUpscaleSession : IDisposable
 
     public RectI DestRect { get; private set; }
     public bool IsRunning => _thread.IsAlive;
+    public bool IsOverlayVisible => _overlay?.IsVisible == true;
     public string ExitReason => Volatile.Read(ref _exitReason);
     public string EffectName => _renderEffect.Id;
     public string OverlayDescription => _overlay is null
@@ -46,13 +55,16 @@ public sealed class PortalUpscaleSession : IDisposable
     public event Action<string>? Message;
 
     public PortalUpscaleSession(ScalingMode mode, EffectDefinition effect,
-        string? monitorName, PortalSourceType sourceType = PortalSourceType.Window)
+        string? monitorName, PortalSourceType sourceType = PortalSourceType.Window,
+        bool reuseToken = false, HotkeyBinding? hotkey = null)
     {
         _mode = mode;
         _effect = effect;
         _renderEffect = effect;
         _monitorName = monitorName;
         _sourceType = sourceType;
+        _reuseToken = reuseToken;
+        _hotkeyBinding = hotkey ?? HotkeyBinding.Default;
         _thread = new Thread(Run) { IsBackground = true, Name = "GemPrism-Portal" };
     }
 
@@ -87,6 +99,9 @@ public sealed class PortalUpscaleSession : IDisposable
         if (string.IsNullOrWhiteSpace(ExitReason)) SetExitReason("stopped");
     }
 
+    /// <summary>Thread-safe request used by the tray menu and the portal shortcut.</summary>
+    public void RequestToggleVisibility() => Interlocked.Exchange(ref _toggleRequested, 1);
+
     private void Run()
     {
         try
@@ -111,7 +126,11 @@ public sealed class PortalUpscaleSession : IDisposable
     private void Initialize()
     {
         _portal = new PortalScreenCastClient();
-        string? restoreToken = PortalTokenStore.Load();
+        // Reusing a restore token makes KDE skip the picker and silently
+        // capture the previous window. The default is to always let the user
+        // choose; opt in explicitly when a fixed capture target is wanted.
+        string? restoreToken = _reuseToken ? PortalTokenStore.Load() : null;
+        Emit($"portal picker mode: {(_reuseToken && restoreToken is not null ? "reuse last window" : "choose every start")}");
         _session = _portal.StartAsync(_sourceType, restoreToken).GetAwaiter().GetResult();
         if (_session.Streams.Count == 0)
             throw new InvalidOperationException("portal returned no streams");
@@ -155,10 +174,55 @@ public sealed class PortalUpscaleSession : IDisposable
             _overlay.Width, _overlay.Height, _mode);
         _frame = new byte[_capture.Stride * height];
 
+        StartGlobalShortcut();
+
         Emit($"portal session started effect={EffectName} stream={width}x{height} " +
              $"portalSize={stream.Width}x{stream.Height} source={_sourceType} " +
              $"monitor={_overlay.OutputName} dest={DestRect} " +
              $"extent={_blitter.SwapchainExtent.Width}x{_blitter.SwapchainExtent.Height}");
+    }
+
+    private void StartGlobalShortcut()
+    {
+        try
+        {
+            Emit("portal global shortcut: creating client");
+            _shortcuts = new PortalGlobalShortcuts();
+            Emit("portal global shortcut: client created");
+            _shortcuts.Activated += id =>
+            {
+                if (string.Equals(id, "toggle-overlay", StringComparison.Ordinal))
+                    RequestToggleVisibility();
+            };
+            string description = "显示/隐藏宝石棱镜超分覆盖层";
+            string trigger = _hotkeyBinding.ToPortalTrigger();
+            _shortcutTask = Task.Run(() => _shortcuts.BindAsync("toggle-overlay", description, trigger));
+            Emit($"portal global shortcut requested trigger='{trigger}' " +
+                 "(KDE may ask for approval; XWayland focus uses XGrabKey)");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"portal global shortcut unavailable: {ex.Message}");
+            _shortcuts = null;
+        }
+    }
+
+    private void ToggleOverlay()
+    {
+        if (_overlay is null) return;
+        if (_overlay.IsVisible)
+        {
+            _overlay.Hide();
+            _overlay.SetInputRegion(null);
+            Emit("portal overlay hidden (user)");
+        }
+        else
+        {
+            _overlay.Show();
+            _overlay.SetInputRegion(null);
+            _forceRender = true;
+            Emit("portal overlay shown (user)");
+        }
     }
 
     private void Loop()
@@ -175,44 +239,54 @@ public sealed class PortalUpscaleSession : IDisposable
                 break;
             }
 
+            if (Interlocked.Exchange(ref _toggleRequested, 0) != 0)
+                ToggleOverlay();
+
             long sequence = _capture.Sequence;
-            if (sequence != _lastSequence)
+            bool newFrame = sequence != _lastSequence;
+            if (newFrame)
             {
                 _lastSequence = sequence;
-                var captureClock = Stopwatch.StartNew();
                 if (_capture.TryCopyFrame(_frame, out _))
                 {
-                    double captureMs = captureClock.Elapsed.TotalMilliseconds;
-                    stats.OnCaptured();
-                    try
-                    {
-                        _blitter.Render(_frame, _capture.Width, _capture.Height,
-                            _capture.Stride, DestRect, null);
-                        stats.OnPresented();
-                        stats.OnFrame(new FrameTimings(
-                            captureMs, 0,
-                            _blitter.LastUploadCpuMs,
-                            _blitter.LastEffectCpuMs,
-                            _blitter.LastPresentCpuMs,
-                            _blitter.LastTotalCpuMs,
-                            _blitter.LastGpuUploadMs,
-                            _blitter.LastGpuEffectMs,
-                            _blitter.LastGpuTailMs,
-                            _blitter.LastGpuTimingsValid));
-                    }
-                    catch (Exception ex)
-                    {
-                        SetExitReason($"portal present error: {ex.GetType().Name}: {ex.Message}");
-                        break;
-                    }
+                    _hasFrame = true;
                     lastFrameAt = Environment.TickCount64;
+                }
+            }
+
+            if (_overlay.IsVisible && _hasFrame && (newFrame || _forceRender))
+            {
+                _forceRender = false;
+                var captureClock = Stopwatch.StartNew();
+                try
+                {
+                    _blitter.Render(_frame, _capture.Width, _capture.Height,
+                        _capture.Stride, DestRect, null);
+                    stats.OnCaptured();
+                    stats.OnPresented();
+                    stats.OnFrame(new FrameTimings(
+                        captureClock.Elapsed.TotalMilliseconds, 0,
+                        _blitter.LastUploadCpuMs,
+                        _blitter.LastEffectCpuMs,
+                        _blitter.LastPresentCpuMs,
+                        _blitter.LastTotalCpuMs,
+                        _blitter.LastGpuUploadMs,
+                        _blitter.LastGpuEffectMs,
+                        _blitter.LastGpuTailMs,
+                        _blitter.LastGpuTimingsValid));
+                }
+                catch (Exception ex)
+                {
+                    SetExitReason($"portal present error: {ex.GetType().Name}: {ex.Message}");
+                    break;
                 }
             }
 
             var report = stats.Tick();
             if (report is not null)
             {
-                Emit($"stats {report.ToLogString()} hidden=False popup=False userHidden=False");
+                Emit($"stats {report.ToLogString()} hidden={!_overlay.IsVisible} popup=False " +
+                     $"userHidden={!_overlay.IsVisible}");
                 StatsCsv.TryWrite(report);
             }
 
@@ -227,6 +301,9 @@ public sealed class PortalUpscaleSession : IDisposable
 
     private void Cleanup()
     {
+        try { _shortcutTask?.Wait(TimeSpan.FromMilliseconds(500)); } catch { }
+        try { _shortcuts?.Dispose(); } catch (Exception ex) { Emit($"dispose global shortcut: {ex.Message}"); }
+        _shortcuts = null;
         try { _capture?.Dispose(); } catch (Exception ex) { Emit($"dispose pipewire: {ex.Message}"); }
         try { _blitter?.Dispose(); } catch (Exception ex) { Emit($"dispose blitter: {ex.Message}"); }
         try { _overlay?.Dispose(); } catch (Exception ex) { Emit($"dispose overlay: {ex.Message}"); }

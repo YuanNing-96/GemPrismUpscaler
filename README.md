@@ -15,7 +15,8 @@
 | 窗口类型 | X11 / XWayland 顶层窗口：支持；原生 Wayland 窗口：M2a 通过 portal 窗口/显示器捕获（窗口化含标题栏/阴影，全屏/无边框推荐） |
 | 显示器 | 单显示器：支持；多显示器：M1a 基础 + M2a Wayland 输出枚举/分数缩放/基础热插拔 |
 | HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；HDR 色彩管理：M2c |
-| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入：M2b 嵌套合成器 |
+| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入/自动跟随焦点：M2b 嵌套合成器 |
+| 原生 Wayland 热键 | **支持（KDE）**：portal GlobalShortcuts；首次授权，若 KDE 存成 `none` 需系统设置手动分配 |
 | GPU | NVIDIA 专有驱动：已验证；AMD/Intel Vulkan：理论可用、未验证；多 GPU/混合显卡：未验证 |
 | 算法 | **Anime4K S/M/L/VL 2× + Lanczos-2：支持**（默认 S；VL 为实验最高画质档）；双线性回退：支持；FSR1、NIS、Lanczos-3、Bicubic：未排期 |
 | 自定义 effect | **支持**：TOML + 预编译 SPIR-V，运行时不需要 glslang；详见 [.doc/effects.md](.doc/effects.md) |
@@ -184,7 +185,7 @@ done
 - 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
 - 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
 - 零拷贝只完成“导出 + Vulkan 导入”可行性，未做 fence 同步和真实游戏端到端验证，**不进入默认链路**。详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
-- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；HDR/linear 在 M2c。
+- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay + GlobalShortcuts；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；**切到其他程序不会自动收起**（M2a 用热键/托盘，M2b 解决）；HDR/linear 在 M2c。
 - **M1c 不做动画**（留到 v1.0 前评估）；VL 是实验最高画质档，帧率不作为验收门槛。
 - **KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动**（DP 100% 正常）。这是 Avalonia/Wayland popup 的定位限制，M1 不处理，已记录在 [.doc/backlog.md](.doc/backlog.md) §7。
 - 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 上限 256 B（设备可能更低）。

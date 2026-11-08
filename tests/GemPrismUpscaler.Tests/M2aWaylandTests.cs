@@ -116,6 +116,14 @@ public class M2aConfigTests
     }
 
     [Fact]
+    public void PortalGlobalShortcutTrigger_UsesXdgUppercaseSyntax()
+    {
+        var binding = HotkeyBinding.Parse("Ctrl+Alt+Shift+A");
+        Assert.Equal("CTRL+ALT+SHIFT+A", binding.ToPortalTrigger());
+        Assert.Equal("ALT+SHIFT+A", HotkeyBinding.Default.ToPortalTrigger());
+    }
+
+    [Fact]
     public void FourByThreeSource_ContentRectIsPillarboxed()
     {
         var rect = LayoutCalculator.ComputeDestRect(1024, 768, 3840, 2160, ScalingMode.Fit);

@@ -12,11 +12,20 @@ M2a 把呈现从 X11 override-redirect 扩展到 Wayland layer-shell，并加入
 - **多屏/缩放**：`wl_output` + `zxdg_output_v1` 输出枚举；旋转/100%/150% scale；当前输出消失时回退另一块屏。
 - **CLI/config**：`--backend auto|x11|wayland`、`--input auto|passthrough|forward`、`--capture auto|x11|portal`；`[capture]`、`[input] pointer_mode`。
 - **文档**：新增 `.doc/m2-plan.md`（M2a/M2b/M2c 详细计划）、`.doc/cli.md`；更新 roadmap/design/compatibility/backlog/README。
-- **测试**：新增 Wayland 几何/旋转 scale/4:3/配置测试；总计 101/101。
+- **测试**：新增 Wayland 几何/旋转 scale/4:3/配置测试；修复后总计 103/103。
+
+### 0.4.0 修复（2026-11-08）
+
+- **修复 layer-shell 恢复崩溃**：弹窗/失焦隐藏后立即恢复时，KWin 报 `buffer attached prior to first configure`，随后 `vkAcquireNextImageKHR ErrorSurfaceLostKhr` 停止会话。现在隐藏时先让合成器处理 unmapped，恢复时重新请求 configure（真实逻辑尺寸）并等待；恢复后不再丢 surface，XWayland 弹窗/焦点恢复和原生 portal 手动收起/显示均通过。
+- **portal 选择器默认每次弹出**：不再默认复用 `restore_token` 跳过选择器；新增 `--portal-reuse-token` 显式复用上次窗口。
+- **接入 portal GlobalShortcuts**：原生 Wayland 焦点下 `Alt+Shift+A` 也可用；通过 `org.freedesktop.host.portal.Registry` 注册 app id，并自动写入 `~/.local/share/applications/org.gemprism.GemPrismUpscaler.desktop`。KDE 的 trigger 使用 `ALT+SHIFT+A`（大写）。
+- **portal 托盘/快捷键手动收起**：原生会话支持托盘“隐藏/显示覆盖层”和 portal 快捷键；隐藏后恢复也会走新的 configure 流程。
+- **测试**：新增 XDG trigger 格式测试；总计 103/103。
 
 ### 已知限制
 
-- **portal GlobalShortcuts 未接**：XWayland 焦点下 `XGrabKey` 仍可用；原生 Wayland 焦点下不保证。
+- **原生 Wayland 跟随焦点未实现**：portal 不提供源窗口身份/焦点，无法可靠判断“用户切到了别的程序”。M2a 用 `Alt+Shift+A` / 托盘手动收起；自动跟随属于 M2b 嵌套合成器。
+- **KDE 快捷键可能存成 `none`**：首次授权窗口若没有把快捷键“应用”为当前值，`kglobalshortcutsrc` 会写成 `toggle-overlay=none,Alt+Shift+A`；此时热键不生效，需在“系统设置 → 快捷键 → GemPrismUpscaler”手动分配。
 - **KDE 窗口流按输出 scale 合成**：720p 全屏游戏在 4K/150% 输出上 `pipewire caps` 为 3840×2160；2× 会产生 8K 中间纹理（实测 VL 10–12fps、VRAM 7.6GB、GPU 100%）且没有真实超分收益。M2a 在源尺寸 >= 输出尺寸时自动降级 bilinear；低分辨率原生源需 M2b 嵌套合成器或改用 XWayland 窗口捕获。
 - **窗口化原生捕获含标题栏/阴影**：KDE 窗口流为 960×582（150% + 装饰）；M2a 正式验收以全屏/无边框源为准，窗口化原生输入由 M2b 嵌套合成器解决。
 - **XWayland 捕获撕裂**仍用 XShm；最终方案在 M2c。

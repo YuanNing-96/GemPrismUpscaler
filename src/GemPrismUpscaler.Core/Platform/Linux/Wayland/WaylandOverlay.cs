@@ -455,8 +455,21 @@ public sealed class WaylandOverlay : IOverlay
         _visible = true;
         try
         {
+            // The layer surface was unmapped by Hide(). KWin requires a fresh
+            // configure before a buffer may be attached again; ask for one and
+            // give the compositor a bounded window to send it. If it does not
+            // arrive, proceed after the wait (KWin accepts the next attach once
+            // it has processed the unmap).
+            _configured = false;
+            _layerSurface?.SetSize((uint)Math.Max(1, _logicalWidth), (uint)Math.Max(1, _logicalHeight));
             _surface?.Commit();
             _display.Flush();
+
+            var deadline = Environment.TickCount64 + 500;
+            while (!_configured && Environment.TickCount64 < deadline)
+                Pump(10);
+            if (!_configured)
+                Log.Debug("wayland overlay remap: no configure, continuing");
         }
         catch (Exception ex)
         {
@@ -473,6 +486,10 @@ public sealed class WaylandOverlay : IOverlay
             _surface?.Attach(null, 0, 0);
             _surface?.Commit();
             _display.Flush();
+            // Let the compositor process the unmap before the next render
+            // attaches a buffer. Batching both into one dispatch makes KWin
+            // reject the buffer as pre-configure.
+            _display.Roundtrip();
         }
         catch (Exception ex)
         {

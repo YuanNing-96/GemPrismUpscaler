@@ -1,7 +1,7 @@
 # GemPrismUpscaler · M2 阶段计划（M2a / M2b / M2c）
 
 - 更新时间：2026-11-07
-- 当前稳定版：`0.4.0`（M2a，核心与 portal 已实现）
+- 当前版本：`0.4.0`（M2a，核心 + portal + GlobalShortcuts 已实现；正式验收中）
 - M2 目标版本：M2a `0.4.0`、M2b `0.5.0`、M2c `0.6.0`
 - 目标环境：KDE Plasma 6.8.2 Wayland + XWayland；NVIDIA RTX 4060 Laptop；HDMI-A-1 3840×2160@144（HDR、150%）+ DP-1 1800×2880（100%）
 - 本文是 M2 的计划与交接文档。`roadmap.md` 是摘要，本文是详细范围/验收/实现决策；`design.md` 记录架构，`compatibility.md` 记录支持矩阵，`backlog.md` 记录未排期项。
@@ -24,7 +24,7 @@
 | 7 | 弹窗由嵌套 compositor 处理 | 抓整个嵌套输出；对话框在内部浮动/置顶；不需要 X11 弹窗探测 |
 | 8 | 主窗口识别分层降级 | Profile / token+PID / sway IPC / transient+type / 尺寸；歧义时手动选择 |
 | 9 | 4:3 与非 720p 必须支持 | 嵌套输出尺寸 = 主窗口客户区尺寸；最终 fit/stretch 走现有 LayoutCalculator |
-| 10 | M2a 不做旧功能完整回归 | 构建 + 91 项测试 + M2a 主要路径冒烟 |
+| 10 | M2a 不做旧功能完整回归 | 构建 + 103 项测试 + M2a 主要路径冒烟 |
 
 ---
 
@@ -53,7 +53,7 @@
 
 ## 3. 当前基线与已知限制（M1c / 0.3.0）
 
-- 构建：`dotnet build -c Release` 0 warning / 0 error；`dotnet test` 91/91。
+- 构建：`dotnet build -c Release` 0 warning / 0 error；`dotnet test` 103/103。
 - 捕获：X11/XWayland 窗口，`XShmGetImage` + XDamage + 64px 脏矩形。
 - 呈现：X11 override-redirect overlay + Vulkan Xlib swapchain。
 - 输入：overlay 接收指针 + `XSendEvent` 转发；键盘不转发，焦点交还游戏。
@@ -71,7 +71,7 @@
 
 | 阶段 | 版本 | 主题 | 交付 | 不包含 |
 |---|---|---|---|---|
-| **M2a** | 0.4.0 | Wayland 平台核心 | 后端抽象；Wayland layer-shell overlay + Vulkan WSI；分数缩放；Wayland 输出枚举/热插拔；XWayland 混合（X11 捕获 + Wayland overlay + 转发）；原生全屏 portal/PipeWire 捕获 + 输入穿透；GlobalShortcuts 热键；CLI 文档 | 嵌套合成器、窗口化原生输入、HDR、零拷贝、跨屏拼接 |
+| **M2a** | 0.4.0 | Wayland 平台核心 | 后端抽象；Wayland layer-shell overlay + Vulkan WSI；分数缩放；Wayland 输出枚举/热插拔；XWayland 混合（X11 捕获 + Wayland overlay + 转发）；原生全屏 portal/PipeWire 捕获 + 输入穿透；GlobalShortcuts 热键；CLI 文档 | 嵌套合成器、窗口化原生输入、原生焦点自动跟随、HDR、零拷贝、跨屏拼接 |
 | **M2b** | 0.5.0 | 嵌套合成器 | sway 私有虚拟显示器；`wlr-screencopy`/`wlr-export-dmabuf` 抓帧；`wlr-virtual-pointer`/虚拟键盘注入；任意分辨率/宽高比；弹窗/启动器/Lutris；窗口识别 | HDR、零拷贝优化 |
 | **M2c** | 0.6.0 | 色彩、性能与扩展 | HDR/linear；PipeWire/嵌套 DMA-BUF 零拷贝；混合 GL+Vulkan 复核；跨屏拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案 | — |
 
@@ -93,9 +93,9 @@ M1c (0.3.0)
 - X11 会话保持现有行为不回归。
 - Wayland 会话下：
   - XWayland 窗口使用 **X11 捕获 + Wayland layer-shell overlay + 指针转发**（保住现有 `--window` 体验和视觉小说输入）。
-  - 原生 Wayland **全屏/覆盖输出**窗口使用 portal + PipeWire 捕获 + 输入穿透。
+  - 原生 Wayland **全屏/覆盖输出**窗口使用 portal + PipeWire 捕获 + 输入穿透；切到其他程序不自动收起（M2b）。
   - 多显示器、热插拔、每屏缩放/旋转、负坐标可用。
-  - 全局热键在 Wayland 下可用（GlobalShortcuts；失败时 UI 明确提示）。
+  - 全局热键在 Wayland 下可用（GlobalShortcuts；KDE 首次授权；若存成 `none` 需系统设置手动分配）。
 - 提供 CLI/配置/UI 的 backend/capture/input 选择；`.doc/cli.md` 完整说明。
 
 ### 5.2 架构
@@ -227,7 +227,7 @@ mode = "auto"        # auto | passthrough | forward
 2. 原生 Wayland 全屏窗口（vkcube/mpv）经 portal/PipeWire 捕获、超分、呈现；输入穿透（不抢焦点）。
 3. 4K/150%（HDMI）与 1800×2880/100%（DP）双屏：位置、比例、输入映射正确；输出热插拔 1 秒内跟随。
 4. 静止画面不重复 capture/present；动态画面无明显撕裂（原生 Wayland 由 PipeWire 合成帧保证）。
-5. 纯 X11 会话：91/91 测试 + 主要路径冒烟不回归。
+5. 纯 X11 会话：103/103 测试 + 主要路径冒烟不回归。
 6. 构建 0 warning / 0 error；新增单元测试通过。
 7. `.doc/cli.md`、compatibility/design/roadmap 更新；版本 `0.4.0`。
 
@@ -239,28 +239,31 @@ mode = "auto"        # auto | passthrough | forward
 - Wayland layer-shell overlay + Vulkan Wayland WSI；150% 分数缩放；HDMI 4K 与 DP 竖屏（旋转/100%）实测。
 - XWayland 混合：X11 捕获 + Wayland overlay + `wl_pointer` → `XSendEvent`；弹窗隐藏/恢复、静止画面、输入（uinput 指针）冒烟。
 - 多屏/输出选择：按 X11 monitor 名称匹配 `wl_output`；当前输出消失时回退到另一块屏。
-- CLI/config：`--backend auto|x11|wayland`、`--input auto|passthrough|forward`、`--capture auto|x11|portal`（portal 未实现，回退 X11 并提示）；`[capture]`、`[input] pointer_mode`。
+- CLI/config：`--backend auto|x11|wayland`、`--input auto|passthrough|forward`、`--capture auto|x11|portal`（`--window` 路径仍回退 X11；原生窗口用 `--portal-window`）；`[capture]`、`[input] pointer_mode`。
 - **portal + PipeWire 原生 Wayland 捕获（2026-11-07 验证）**：
   - `--portal-window` / `--portal-monitor`，Tmds.DBus.Protocol + 生成的 ScreenCast/Request/Session 代理。
-  - KDE 系统选择器；`restore_token` 单次使用并保存到 `~/.config/GemPrismUpscaler/portal.token`，后续免打扰。
+  - KDE 系统选择器**默认每次启动都弹出**；`portal.token` 仍轮换保存，只有显式 `--portal-reuse-token` 才复用它跳过选择器。
   - PipeWire fd + serial → `gst-launch pipewiresrc` → 专用 frame pipe（避免 `-v` caps 日志污染帧）→ BGRA 帧。
   - caps 从 gst `-v` stdout 解析（KDE 窗口流可能没有 `size` 属性）。
   - 实测 vkcube 640×360 窗口：`pipewire caps 960x582`（150% + 窗口装饰）、60–69fps、GPU 59–68%、dest=3563×2160。
   - 已知：KDE 窗口捕获包含标题栏/阴影；M2a 的正式验收以全屏/无边框原生窗口为准，窗口化装饰裁剪留后续。
   - **重要限制**：KDE 的窗口流是**按输出 scale 合成后的画面**。720p 全屏游戏在 4K/150% 输出上，`pipewire caps` 是 3840×2160，不是 720p；对它做 2× 会得到 8K 中间纹理（实测 VL 10–12fps、VRAM 7.6GB、GPU 100%），且没有真实超分收益。M2a 已加保护：源尺寸 >= 输出尺寸时自动改用 bilinear 1×，避免 8K；真正的低分辨率原生源需要 M2b 嵌套合成器或改用 XWayland 窗口捕获。
-- 自动化：构建 0 warning / 0 error；测试 101/101。
+- **2026-11-08 修复与 GlobalShortcuts**：
+  - 修复 layer-shell 从隐藏恢复时的 `buffer attached prior to first configure` / `SurfaceLostKhr`：隐藏后先 roundtrip，显示时重新请求 configure 并等待；XWayland 弹窗/焦点恢复、原生 portal 收起/显示均稳定。
+  - 接入 portal GlobalShortcuts v2 + `org.freedesktop.host.portal.Registry`；自动写 user-local desktop entry；XDG trigger 使用 `ALT+SHIFT+A`。
+  - 原生会话支持快捷键/托盘手动显示隐藏；原生焦点自动跟随仍不在 M2a。
+- 自动化：构建 0 warning / 0 error；测试 103/103。
 
 未完成（M2a 剩余）：
 
-- portal GlobalShortcuts（当前 XWayland 仍用 `XGrabKey`，`hotkey=True`；原生 Wayland 焦点下不保证）。
-- 原生窗口选择器 UI（当前 CLI `--portal-window`；GUI 入口待接）。
+- 原生焦点自动跟随（portal 不提供源窗口身份/焦点；M2b 嵌套合成器）。
 - 窗口化原生捕获的装饰裁剪；输出热插拔真实拔插回归；嵌套/原生窗口化输入（M2b）。
 - 真实视觉小说手测与 M2a 验收记录。
 
 ### 5.10 实现顺序
 
 1. 文档定稿（本文件 + roadmap/design/compatibility/backlog/cli/HANDOVER）。
-2. 后端抽象 + X11 接回，91/91。
+2. 后端抽象 + X11 接回。
 3. Wayland 连接/输出枚举 + layer-shell overlay + Vulkan Wayland WSI。
 4. XWayland 混合（X11 捕获 + Wayland overlay + 输入转发）。
 5. 多屏/分数缩放/热插拔。
@@ -409,7 +412,7 @@ GemPrismUpscaler（KDE 侧）
 自动化：
 
 - `dotnet build GemPrismUpscaler.slnx -c Release`：0 code warning / 0 error。
-- `dotnet test GemPrismUpscaler.slnx -c Release`：现有 91/91 + 新增测试。
+- `dotnet test GemPrismUpscaler.slnx -c Release`：现有 103/103 + 新增测试。
 - 新增测试建议：
   - Wayland 输出 scale/physical/logical 计算；
   - 4:3/16:9/竖屏内容矩形与输入映射；

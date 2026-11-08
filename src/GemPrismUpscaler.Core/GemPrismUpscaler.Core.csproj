@@ -31,6 +31,12 @@
     <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.portal.Session.xml"
                      Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
                      DBusGeneratorMode="Proxy" Visibility="public" />
+    <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.portal.GlobalShortcuts.xml"
+                     Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
+                     DBusGeneratorMode="Proxy" Visibility="public" />
+    <AdditionalFiles Include="/usr/share/dbus-1/interfaces/org.freedesktop.host.portal.Registry.xml"
+                     Namespace="GemPrismUpscaler.Core.Platform.Linux.Portal.DBus"
+                     DBusGeneratorMode="Proxy" Visibility="public" />
   </ItemGroup>
 
   <ItemGroup>
