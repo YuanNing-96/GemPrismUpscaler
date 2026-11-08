@@ -116,11 +116,11 @@ M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性�
 1. KDE Wayland 下 XWayland 视觉小说窗口化：overlay/输入/弹窗/焦点/最小化/关闭不回归。
 2. 原生 Wayland 全屏窗口（vkcube/mpv）经 portal/PipeWire 捕获、超分、呈现；输入穿透不抢焦点。
 3. 4K/150% + 1800×2880/100% 双屏位置/比例/输入正确；输出热插拔 1 秒内跟随。
-4. 静止画面不重复 capture/present；构建 0 warning / 0 error；91/91 + 新增测试。
+4. 静止画面不重复 capture/present；构建 0 warning / 0 error；103/103 + 新增测试。
 5. 纯 X11 会话主要路径冒烟不回归。
 6. 窗口化原生 Wayland 输入不在 M2a 解决（M2b 嵌套）。
 
-### M2b · 嵌套合成器（v0.5.0，计划）
+### M2b · 嵌套合成器（v0.5.0，待启动；B0 spike 先行）
 
 | 模块 | 内容 |
 |---|---|
@@ -130,6 +130,8 @@ M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性�
 | 窗口识别 | Profile / token + PID/进程树 / sway IPC / transient+window type；歧义手动选择 |
 | 弹窗/启动器 | 嵌套内对话框浮动；启动器 → 游戏切换；`--nested` / `--nested-session` |
 | Lutris | per-game 环境变量/wrapper；Steam/Heroic 文档化 best-effort |
+
+**当前状态**：尚未开始代码；先做 B0 spike（headless sway/抓帧/虚拟输入/get_tree），详见 `.agent/M2b-开发交接.md`。
 
 **验收标准**：
 

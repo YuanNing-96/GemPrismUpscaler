@@ -1,12 +1,12 @@
 # GemPrismUpscaler · M2 阶段计划（M2a / M2b / M2c）
 
-- 更新时间：2026-11-07
+- 更新时间：2026-11-08
 - 当前版本：`0.4.0`（M2a，核心 + portal + GlobalShortcuts 已实现；正式验收中）
 - M2 目标版本：M2a `0.4.0`、M2b `0.5.0`、M2c `0.6.0`
 - 目标环境：KDE Plasma 6.8.2 Wayland + XWayland；NVIDIA RTX 4060 Laptop；HDMI-A-1 3840×2160@144（HDR、150%）+ DP-1 1800×2880（100%）
 - 本文是 M2 的计划与交接文档。`roadmap.md` 是摘要，本文是详细范围/验收/实现决策；`design.md` 记录架构，`compatibility.md` 记录支持矩阵，`backlog.md` 记录未排期项。
 
-> M2a 只实现 Wayland 平台核心；M2b 的嵌套合成器与 M2c 的色彩/性能只写计划，不在 M2a 实现。
+> M2a 只实现 Wayland 平台核心；M2b 的嵌套合成器在 M2b 阶段实施；M2c 的色彩/性能在 M2c 阶段实施。
 > 按用户约定：M2 不做旧功能完整回归，只保主要路径；完整回归留 v1.0 前统一做。
 
 ---
@@ -283,7 +283,23 @@ mode = "auto"        # auto | passthrough | forward
 
 ---
 
-## 6. M2b · 嵌套合成器（只写计划，M2a 不实现）
+### 5.12 M1b 与 M2a 呈现路径差异（回归判断）
+
+- M1b/M1c：X11 override-redirect overlay；隐藏 `XUnmapWindow`，显示 `XMapRaised`。没有 layer-shell，因此不会跨屏，也不会有 layer 被重置的问题。
+- M2a 默认：Wayland `zwlr_layer_shell_v1` overlay + Vulkan Wayland WSI。KWin 在 layer surface unmap 时会发 `closed` 并把 layer 重置为 Bottom，所以不能照搬 `XUnmapWindow`。
+- 当前 M2a 隐藏：不 unmap，移到整个逻辑桌面右侧之外；显示恢复 anchor 并声明 Overlay。不要改回“当前输出左侧”或 `attach(null)`。
+- 对照 M1b：`--backend x11` 仍走 X11 overlay。
+
+---
+
+## 6. M2b · 嵌套合成器（M2b 阶段实施）
+
+### 6.0 实施状态（2026-11-08）
+
+- M2a 已完成并推送 `cd9d9b8`；M2b 尚未开始代码。
+- 当前第一步是 **B0 spike**：headless sway、`wlr-screencopy`、`wlr-virtual-pointer`、虚拟键盘、`swaymsg get_tree`。
+- 详细可执行交接（B0 命令、B1–B5、风险、第一步）见 `.agent/M2b-开发交接.md`。
+- 用户约定：M2b 只做主路径，不创建 goal，用 plan/todo；不做 promote/改源窗口状态。
 
 ### 6.1 目标
 
