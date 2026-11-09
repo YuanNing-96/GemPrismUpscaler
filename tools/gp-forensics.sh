@@ -12,8 +12,16 @@ TS=$(date +%Y%m%d-%H%M%S)
 OUT=/tmp/gp-forensics-$TS
 mkdir -p "$OUT"
 
-APP=$(pgrep -f "net10.0/GemPrismUpscaler --nested" | head -1)
-GAME=${1:-$(pgrep -f "KhimeDL_CHS|bgi\.exe|Endfield" | head -1)}
+APP=$(pgrep -x GemPrismUpscaler | head -1)
+GAME=${1:-}
+if [ -z "$GAME" ]; then
+    # Match the real game process by its comm; "pgrep -f" would also match the
+    # Lutris/python/umu wrappers that carry the exe name in their cmdline.
+    for name in KhimeDL_CHS.exe bgi.exe Endfield.exe; do
+        GAME=$(pgrep -x "$name" 2>/dev/null | head -1)
+        [ -n "$GAME" ] && break
+    done
+fi
 D=$(ls -dt /tmp/gemprism-nested-* 2>/dev/null | head -1)
 SWAYSOCK=$(ls "$D"/sway-ipc.*.sock 2>/dev/null | head -1)
 DISP=$(cat "$D/display.txt" 2>/dev/null)
