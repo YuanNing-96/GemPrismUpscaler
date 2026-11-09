@@ -266,6 +266,7 @@ public sealed class NestedUpscaleSession : IDisposable
                 if (!_states.ContainsKey(state.Id)) continue;
                 if (state.Ignored || state.Host is null || state.Blitter is null) continue;
                 if (RenderState(state, stats)) rendered = true;
+                CheckCaptureStall(state);
             }
 
             if (rendered)
@@ -1216,6 +1217,7 @@ public sealed class NestedUpscaleSession : IDisposable
             return false;
         }
 
+        state.LastFrameAt = Environment.TickCount64;
         stats.OnCaptured();
         stats.OnPresented();
         stats.OnFrame(new FrameTimings(
@@ -1225,6 +1227,24 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Blitter.LastGpuUploadMs, state.Blitter.LastGpuEffectMs,
             state.Blitter.LastGpuTailMs, state.Blitter.LastGpuTimingsValid));
         return true;
+    }
+
+    /// <summary>
+    /// warn when a visible window produces no frames for a while. With
+    /// ext-image-copy-capture a static scene legitimately produces no frames,
+    /// but a long silence is also what a stuck game looks like, so record it
+    /// with the state needed to tell the two apart.
+    /// </summary>
+    private void CheckCaptureStall(WindowState state)
+    {
+        long now = Environment.TickCount64;
+        if (state.LastFrameAt == 0) { state.LastFrameAt = now; return; }
+        if (now - state.LastFrameAt < 5000 || now - state.LastStallLog < 15000) return;
+        state.LastStallLog = now;
+        Emit($"nested no-frame watchdog '{DescribeWindow(state.Info)}' " +
+             $"{(now - state.LastFrameAt) / 1000}s host={state.Host?.Width}x{state.Host?.Height} " +
+             $"focused={state.Id == _focusedId} minimized={state.Minimized} " +
+             $"fullscreen={state.Info.FullscreenMode != 0} upscale={state.Upscale}");
     }
 
     private void PrepareInput(WindowState state)
@@ -1431,6 +1451,8 @@ public sealed class NestedUpscaleSession : IDisposable
         public NestedWindowInfo Info { get; set; } = null!;
         public bool Minimized { get; set; }
         public bool IsDialog { get; set; }
+        public long LastFrameAt { get; set; }
+        public long LastStallLog { get; set; }
         public string OutputName { get; set; } = string.Empty;
         public RectI OutputOrigin { get; set; }
         public INestedFrameSource? Capture { get; set; }

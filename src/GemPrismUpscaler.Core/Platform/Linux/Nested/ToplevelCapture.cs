@@ -318,8 +318,27 @@ public sealed class ToplevelCapture : INestedFrameSource
             }
             return;
         }
+        bool swapRedBlue = _format is WlShm.FormatEnum.Xbgr8888 or WlShm.FormatEnum.Abgr8888;
+        if (!swapRedBlue)
+        {
+            for (int y = 0; y < Height; y++)
+                Buffer.BlockCopy(_raw, y * _sourceStride, _pixels, y * dstStride, dstStride);
+            return;
+        }
+        // xbgr8888/abgr8888 hold R,G,B,A in memory (the compositor's XWayland
+        // path advertises xbgr8888); our blitter samples B,G,R,A.
         for (int y = 0; y < Height; y++)
-            Buffer.BlockCopy(_raw, y * _sourceStride, _pixels, y * dstStride, dstStride);
+        {
+            int s = y * _sourceStride;
+            int d = y * dstStride;
+            for (int x = 0; x < Width; x++, s += 4, d += 4)
+            {
+                _pixels[d] = _raw[s + 2];
+                _pixels[d + 1] = _raw[s + 1];
+                _pixels[d + 2] = _raw[s];
+                _pixels[d + 3] = 255;
+            }
+        }
     }
 
     public ReadOnlySpan<byte> Pixels => _pixels;
@@ -416,7 +435,8 @@ public sealed class ToplevelCapture : INestedFrameSource
             if (format is WlShm.FormatEnum.Argb8888 or WlShm.FormatEnum.Xrgb8888)
                 _owner._format = format;
             else if (_owner._format is not (WlShm.FormatEnum.Argb8888 or WlShm.FormatEnum.Xrgb8888)
-                     && format is WlShm.FormatEnum.Bgr888 or WlShm.FormatEnum.Rgb888)
+                     && format is WlShm.FormatEnum.Bgr888 or WlShm.FormatEnum.Rgb888
+                         or WlShm.FormatEnum.Xbgr8888 or WlShm.FormatEnum.Abgr8888)
                 _owner._format = format;
         }
 
