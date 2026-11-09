@@ -106,6 +106,7 @@ public sealed class NestedSession : IDisposable
         const string fileName = "xdg-decoration-v2-shim.so";
 
         string? explicitShim = Environment.GetEnvironmentVariable("GEMPRISM_DECORATION_SHIM");
+        if (explicitShim is "off" or "none" or "0") return null;
         if (!string.IsNullOrWhiteSpace(explicitShim) && File.Exists(explicitShim))
             return explicitShim;
 
