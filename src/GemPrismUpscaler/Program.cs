@@ -53,6 +53,7 @@ sealed class Program
         if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" ||
                                 args[0] == "--portal-window" || args[0] == "--portal-monitor" ||
                                 args[0] == "--nested" || args[0] == "--nested-session" ||
+                                args[0] == "--nested-probe" ||
                                 args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
@@ -139,6 +140,8 @@ sealed class Program
                 return RunNested(args);
             if (args[0] == "--nested-session")
                 return RunNestedSession(args);
+            if (args[0] == "--nested-probe")
+                return RunNestedProbe(args);
 
             if (args.Any(a => a == "--portal-window" || a == "--portal-monitor"))
                 return RunPortal(args);
@@ -332,6 +335,48 @@ sealed class Program
                               $"nested desktop follows monitor '{monitor.Name}' " +
                               $"{monitor.Width}x{monitor.Height}");
         return monitor;
+    }
+
+    private static int RunNestedProbe(string[] args)
+    {
+        int separator = Array.IndexOf(args, "--");
+        if (separator < 0 || separator == args.Length - 1)
+        {
+            Console.Error.WriteLine("usage: GemPrismUpscaler --nested-probe [--monitor NAME] " +
+                                    "[--app-id X] [--title X] [--frames N] [--out PATH] -- <command...>");
+            return 2;
+        }
+
+        NestedMonitorInfo monitor;
+        try { monitor = ResolveNestedMonitor(args); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"nested monitor error: {ex.Message}");
+            return 1;
+        }
+
+        string swayPath = GetOption(args, "--sway") ?? NestedSession.ResolveSwayPath();
+        string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
+        string[] command = args[(separator + 1)..];
+        int frames = int.TryParse(GetOption(args, "--frames"), out int n) ? n : 60;
+        string outPath = GetOption(args, "--out") ??
+                         Path.Combine(Path.GetTempPath(), "gemprism-toplevel-probe.ppm");
+
+        using var session = new NestedSession(swayPath, command, monitor.Width, monitor.Height,
+            swayMsgPath);
+        try
+        {
+            session.Start();
+            session.StartCommand();
+            Console.WriteLine($"probe session wayland={session.WaylandDisplay} " +
+                              $"sway={session.SwaySocket} display={session.Display}");
+            return NestedCaptureProbe.Run(session, GetOption(args, "--app-id"),
+                GetOption(args, "--title"), outPath, frames);
+        }
+        finally
+        {
+            session.Stop();
+        }
     }
 
     private static int RunNested(string[] args)

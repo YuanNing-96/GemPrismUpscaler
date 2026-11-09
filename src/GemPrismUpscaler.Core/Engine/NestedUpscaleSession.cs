@@ -48,6 +48,7 @@ public sealed class NestedUpscaleSession : IDisposable
     private string? _exitReason;
     private Exception? _initError;
 
+    private readonly bool _toplevelMode;
     private SwayIpc? _ipc;
     private SwayOutputPool? _pool;
     private NestedWindowTracker? _tracker;
@@ -74,6 +75,7 @@ public sealed class NestedUpscaleSession : IDisposable
         _monitorName = monitorName;
         _waitForCommand = waitForCommand;
         _preferredMain = preferredMain;
+        _toplevelMode = Environment.GetEnvironmentVariable("GEMPRISM_TOPLEVEL_CAPTURE") is "1" or "true";
         _thread = new Thread(Run) { IsBackground = true, Name = "nested-upscale" };
     }
 
@@ -154,13 +156,24 @@ public sealed class NestedUpscaleSession : IDisposable
         _tracker = new NestedWindowTracker(
             _ipc, SwayConfig.DefaultOutput, _session.Token, _session.CommandPid,
             _preferredMain, ownsIpc: false);
-        _pool = new SwayOutputPool(_ipc, SwayConfig.DefaultOutput, _outputWidth, _outputHeight);
-        _pool.Initialize();
+        if (_toplevelMode)
+        {
+            // Single stable output: clients see one monitor for their whole
+            // lifetime (no simulated hotplug), and each window is captured
+            // through ext-image-copy-capture by its own toplevel handle.
+            _pool = null;
+        }
+        else
+        {
+            _pool = new SwayOutputPool(_ipc, SwayConfig.DefaultOutput, _outputWidth, _outputHeight);
+            _pool.Initialize();
+        }
         _input = new NestedInput(_session.Display, _session.WaylandDisplay);
         EnsureMinimizeProbe();
 
-        Log.Info($"nested multi-window: monitor='{_monitorName ?? "auto"}' " +
-                 $"output={_outputWidth}x{_outputHeight} base='{_pool.BaseOutput}' " +
+        Log.Info($"nested {(_toplevelMode ? "single-output/toplevel-capture" : "multi-window")}: " +
+                 $"monitor='{_monitorName ?? "auto"}' output={_outputWidth}x{_outputHeight} " +
+                 $"base='{_pool?.BaseOutput ?? SwayConfig.DefaultOutput}' " +
                  $"mode={(_mode == ScalingMode.Fit ? "fit" : "stretch")} effect='{_effect.Id}'");
     }
 
@@ -207,7 +220,7 @@ public sealed class NestedUpscaleSession : IDisposable
                     waitingLogged = true;
                     lastWaitLog = now;
                     Emit($"nested waiting for game windows; candidates={_tracker!.LastCandidateCount} " +
-                         $"outputs={_pool!.Outputs.Count}");
+                         $"outputs={_pool?.Outputs.Count ?? 0}");
                 }
                 var idleReport = stats.Tick();
                 if (idleReport is not null)
@@ -276,7 +289,7 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void Reconcile(IReadOnlyList<NestedWindowInfo> windows)
     {
-        if (_pool is null || _tracker is null) return;
+        if (_tracker is null || (!_toplevelMode && _pool is null)) return;
 
         var byId = windows.ToDictionary(w => w.Id);
         var newWindows = windows.Where(w => !_states.ContainsKey(w.Id)).ToList();
@@ -317,7 +330,7 @@ public sealed class NestedUpscaleSession : IDisposable
         }
         catch { }
         byId = latest.ToDictionary(w => w.Id);
-        _pool.Refresh();
+        if (!_toplevelMode) _pool!.Refresh();
 
         var nowTick = Environment.TickCount64;
         foreach (var state in _states.Values)
@@ -341,14 +354,15 @@ public sealed class NestedUpscaleSession : IDisposable
         foreach (var state in removals)
             CloseState(state, releaseOutput: true);
 
+        if (_toplevelMode) return;
         var used = _states.Values
             .Where(s => !string.IsNullOrWhiteSpace(s.OutputName))
             .Select(s => s.OutputName)
             .ToHashSet(StringComparer.Ordinal);
         try
         {
-            if (used.Count > 0) _pool.EnsureSpare(used);
-            else _pool.TrimToBase();
+            if (used.Count > 0) _pool!.EnsureSpare(used);
+            else _pool!.TrimToBase();
         }
         catch (Exception ex)
         {
@@ -403,7 +417,7 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private bool AddWindow(NestedWindowInfo window)
     {
-        if (_pool is null || _tracker is null) return false;
+        if (_tracker is null || (!_toplevelMode && _pool is null)) return false;
 
         // A new toplevel must never appear behind the current fullscreen
         // upscale host. Return every existing host to original mode first.
@@ -414,46 +428,68 @@ public sealed class NestedUpscaleSession : IDisposable
             .Select(s => s.OutputName)
             .ToHashSet(StringComparer.Ordinal);
 
-        SwayOutputInfo output;
-        try
+        bool committed = false;
+        SwayOutputInfo outputInfo;
+        if (_toplevelMode)
         {
-            output = _pool.Acquire(used);
+            outputInfo = new SwayOutputInfo(SwayConfig.DefaultOutput,
+                new RectI(0, 0, _outputWidth, _outputHeight), true, _outputWidth, _outputHeight);
         }
-        catch (Exception ex)
+        else
         {
-            Emit($"nested output acquire failed for '{DescribeWindow(window)}': {ex.Message}");
-            return false;
+            try
+            {
+                outputInfo = _pool!.Acquire(used);
+            }
+            catch (Exception ex)
+            {
+                Emit($"nested output acquire failed for '{DescribeWindow(window)}': {ex.Message}");
+                return false;
+            }
         }
 
-        bool committed = false;
-        var state = new WindowState(window.Id) { OutputName = output.Name, OutputOrigin = output.Rect };
+        var state = new WindowState(window.Id)
+        {
+            OutputName = _toplevelMode ? string.Empty : outputInfo.Name,
+            OutputOrigin = outputInfo.Rect
+        };
         try
         {
             _tracker.FloatWindow(window.Id);
-            if (!_tracker.MoveToOutput(window.Id, output.Name))
-                throw new InvalidOperationException($"move to output '{output.Name}' failed");
+            if (!_toplevelMode)
+            {
+                if (!_tracker.MoveToOutput(window.Id, outputInfo.Name))
+                    throw new InvalidOperationException($"move to output '{outputInfo.Name}' failed");
+                // The move changes the global origin of the window. Re-read the
+                // tree instead of cropping with the coordinates from the old
+                // output; otherwise the first frame is displaced or black.
+                Thread.Sleep(40);
+                _tracker.Poll(allowFullscreen: false);
+                _pool!.Refresh();
+                outputInfo = _pool.Find(outputInfo.Name) ?? outputInfo;
+                state.OutputOrigin = outputInfo.Rect;
+            }
 
-            // The move changes the global origin of the window. Re-read the
-            // tree instead of cropping with the coordinates from the old
-            // output; otherwise the first frame is displaced or black.
-            Thread.Sleep(40);
-            _tracker.Poll(allowFullscreen: false);
             if (_tracker.AllWindows.FirstOrDefault(w => w.Id == window.Id) is { } moved)
                 window = moved;
 
-            _pool.Refresh();
-            var outputInfo = _pool.Find(output.Name) ?? output;
-            state.OutputOrigin = outputInfo.Rect;
-
-            var capture = WaitForCapture(output.Name);
+            INestedFrameSource? capture = _toplevelMode
+                ? new ToplevelCapture(_session.WaylandDisplay!, window.AppId, window.Name)
+                : WaitForCapture(outputInfo.Name);
             if (capture is null)
-                throw new InvalidOperationException($"capture for output '{output.Name}' unavailable");
+                throw new InvalidOperationException(
+                    $"capture for '{DescribeWindow(window)}' unavailable");
             state.Capture = capture;
 
-            var crop = ComputeCrop(window.Rect, outputInfo.Rect, capture.Width, capture.Height);
+            // Toplevel capture returns the client's own buffer; the window rect
+            // is the area the nested compositor displays and what pointer
+            // coordinates must target, so it doubles as the input crop.
+            var crop = _toplevelMode
+                ? window.Rect
+                : ComputeCrop(window.Rect, outputInfo.Rect, capture.Width, capture.Height);
             state.Crop = crop;
-            state.SourceWidth = crop.Width;
-            state.SourceHeight = crop.Height;
+            state.SourceWidth = _toplevelMode ? capture.Width : crop.Width;
+            state.SourceHeight = _toplevelMode ? capture.Height : crop.Height;
             string windowKey = WindowKey(window);
             bool legacyLarge = window.FullscreenMode != 0 ||
                 (window.Rect.Height >= outputInfo.Rect.Height &&
@@ -524,7 +560,7 @@ public sealed class NestedUpscaleSession : IDisposable
                  $"source={state.SourceWidth}x{state.SourceHeight} " +
                  $"client={state.Host.Width}x{state.Host.Height} " +
                  $"fullscreen={state.LastGameFullscreen} " +
-                 $"spare={(_pool.Outputs.Count - _states.Count)}");
+                 $"spare={((_pool?.Outputs.Count ?? _states.Count) - _states.Count)}");
 
             if (focusNew)
             {
@@ -543,7 +579,9 @@ public sealed class NestedUpscaleSession : IDisposable
             else
             {
                 DisposeStateResources(state);
-                _pool.Release(output.Name, used);
+                if (!_toplevelMode && _pool is not null &&
+                    !string.IsNullOrEmpty(state.OutputName))
+                    _pool.Release(state.OutputName, used);
             }
             return false;
         }
@@ -573,16 +611,30 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void UpdateStateGeometry(WindowState state)
     {
-        if (state.Host is null || state.Capture is null || _pool is null) return;
+        if (state.Host is null || state.Capture is null) return;
+        if (!_toplevelMode && _pool is null) return;
 
-        var output = _pool.Find(state.OutputName);
-        if (output is not null) state.OutputOrigin = output.Rect;
+        SwayOutputInfo? output = null;
+        if (_pool is not null)
+        {
+            output = _pool.Find(state.OutputName);
+            if (output is not null) state.OutputOrigin = output.Rect;
+        }
 
         string title = WindowTitle(state.Info);
         if (title != state.LastTitle)
         {
             state.LastTitle = title;
             state.Host.SetTitle(title);
+        }
+
+        if (_toplevelMode)
+        {
+            // Toplevel capture always delivers the client buffer; only the
+            // window rect (the input target) changes on move/resize.
+            state.Crop = state.Info.Rect;
+            UpdateDest(state);
+            return;
         }
 
         // v1.0: fullscreen is an explicit game state only. Do not promote large
@@ -1077,19 +1129,35 @@ public sealed class NestedUpscaleSession : IDisposable
         if (!state.Capture.TryCapture(out NestedFrame frame))
             return false;
 
-        var crop = ComputeCrop(state.Info.Rect, state.OutputOrigin, frame.Width, frame.Height);
-        if (!crop.Equals(state.Crop) || crop.Width != state.SourceWidth ||
-            crop.Height != state.SourceHeight)
+        ReadOnlySpan<byte> pixels;
+        int cropStride;
+        if (_toplevelMode)
         {
-            state.Crop = crop;
-            state.SourceWidth = crop.Width;
-            state.SourceHeight = crop.Height;
-            ApplyHostRestoreSize(state);
-            state.Diff.Reset();
-            state.ForceRender = true;
+            if (frame.Width != state.SourceWidth || frame.Height != state.SourceHeight)
+            {
+                state.SourceWidth = frame.Width;
+                state.SourceHeight = frame.Height;
+                state.Diff.Reset();
+                state.ForceRender = true;
+            }
+            pixels = state.Capture.Pixels;
+            cropStride = frame.Stride;
         }
-
-        var pixels = CropFrame(state, state.Capture.Pixels, frame, state.Crop, out int cropStride);
+        else
+        {
+            var crop = ComputeCrop(state.Info.Rect, state.OutputOrigin, frame.Width, frame.Height);
+            if (!crop.Equals(state.Crop) || crop.Width != state.SourceWidth ||
+                crop.Height != state.SourceHeight)
+            {
+                state.Crop = crop;
+                state.SourceWidth = crop.Width;
+                state.SourceHeight = crop.Height;
+                ApplyHostRestoreSize(state);
+                state.Diff.Reset();
+                state.ForceRender = true;
+            }
+            pixels = CropFrame(state, state.Capture.Pixels, frame, state.Crop, out cropStride);
+        }
         var dest = LayoutCalculator.ComputeDestRect(state.SourceWidth, state.SourceHeight,
             state.Host.Width, state.Host.Height, _mode);
         PrepareInput(state, dest);
@@ -1157,7 +1225,14 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void PrepareInput(WindowState state, RectI dest)
     {
-        if (_input is null || _pool is null) return;
+        if (_input is null || state.Capture is null) return;
+        if (_toplevelMode)
+        {
+            _input.SetMapping(dest, state.Crop, state.Capture.Width, state.Capture.Height,
+                0, 0, _outputWidth, _outputHeight);
+            return;
+        }
+        if (_pool is null) return;
         var layout = _pool.LayoutBounds;
         _input.SetMapping(dest, state.Crop, state.Capture?.Width ?? _outputWidth,
             state.Capture?.Height ?? _outputHeight,
@@ -1345,7 +1420,7 @@ public sealed class NestedUpscaleSession : IDisposable
         public bool Minimized { get; set; }
         public string OutputName { get; set; } = string.Empty;
         public RectI OutputOrigin { get; set; }
-        public NestedCapture? Capture { get; set; }
+        public INestedFrameSource? Capture { get; set; }
         public RectI Crop { get; set; }
         public int SourceWidth { get; set; }
         public int SourceHeight { get; set; }

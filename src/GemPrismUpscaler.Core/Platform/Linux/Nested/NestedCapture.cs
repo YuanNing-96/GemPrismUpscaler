@@ -14,7 +14,7 @@ public readonly record struct NestedFrame(int Width, int Height, int Stride, lon
 /// and destroyed for that frame. This is the safe first M2b path; DMA-BUF is
 /// deliberately not part of M2b.
 /// </summary>
-public sealed class NestedCapture : IDisposable
+public sealed class NestedCapture : INestedFrameSource
 {
     private const int PROT_READ = 1;
     private const int MAP_SHARED = 1;
