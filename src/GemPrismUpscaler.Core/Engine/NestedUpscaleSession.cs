@@ -18,6 +18,7 @@ public sealed class NestedUpscaleSession : IDisposable
 {
     private const int MissingWindowGraceMs = 1000;
     private const int FailedWindowRetryMs = 1200;
+    private const int MinimizePollMs = 120;
 
     private static readonly EffectDefinition OriginalEffect = new()
     {
@@ -25,6 +26,9 @@ public sealed class NestedUpscaleSession : IDisposable
         DisplayName = "Original",
         Kind = EffectKind.Bilinear
     };
+
+    private static readonly bool TraceInput =
+        Environment.GetEnvironmentVariable("GEMPRISM_TRACE_INPUT") == "1";
 
     private readonly NestedSession _session;
     private readonly ScalingMode _mode;
@@ -37,6 +41,7 @@ public sealed class NestedUpscaleSession : IDisposable
     private readonly Dictionary<long, WindowState> _states = new();
     private readonly object _stateGate = new();
     private readonly Dictionary<long, long> _retryAfter = new();
+    private readonly Dictionary<string, (int Width, int Height)> _lastWindowedSizes = new();
 
     private volatile bool _stop;
     private bool _disposed;
@@ -47,6 +52,9 @@ public sealed class NestedUpscaleSession : IDisposable
     private SwayOutputPool? _pool;
     private NestedWindowTracker? _tracker;
     private NestedInput? _input;
+    private NestedWindowProbe? _probe;
+    private bool _probeUnavailable;
+    private long _lastMinimizePoll;
 
     private int _outputWidth;
     private int _outputHeight;
@@ -149,6 +157,7 @@ public sealed class NestedUpscaleSession : IDisposable
         _pool = new SwayOutputPool(_ipc, SwayConfig.DefaultOutput, _outputWidth, _outputHeight);
         _pool.Initialize();
         _input = new NestedInput(_session.Display, _session.WaylandDisplay);
+        EnsureMinimizeProbe();
 
         Log.Info($"nested multi-window: monitor='{_monitorName ?? "auto"}' " +
                  $"output={_outputWidth}x{_outputHeight} base='{_pool.BaseOutput}' " +
@@ -226,6 +235,7 @@ public sealed class NestedUpscaleSession : IDisposable
                 if (!_stop) state.Host?.Pump();
             }
             ProcessPendingRequests();
+            SyncMinimizedStates();
             if (_stop) break;
 
             // The command may have exited while hosts still existed; once the
@@ -270,6 +280,19 @@ public sealed class NestedUpscaleSession : IDisposable
 
         var byId = windows.ToDictionary(w => w.Id);
         var newWindows = windows.Where(w => !_states.ContainsKey(w.Id)).ToList();
+
+        // Deiconifying an XWayland window (unmap+map) makes sway destroy and
+        // recreate the view with a new con id, but it is still the same client
+        // window. Reuse the existing host instead of popping a second KDE
+        // window and closing the old one a second later.
+        foreach (var window in newWindows.Where(w => w.X11Window != 0).ToList())
+        {
+            var existing = _states.Values.FirstOrDefault(s =>
+                s.Info.X11Window != 0 && s.Info.X11Window == window.X11Window &&
+                s.Id != window.Id);
+            if (existing is not null) RekeyWindow(existing, window);
+        }
+        newWindows = windows.Where(w => !_states.ContainsKey(w.Id)).ToList();
 
         foreach (var window in newWindows)
         {
@@ -338,6 +361,46 @@ public sealed class NestedUpscaleSession : IDisposable
         if (_states.Count == 0) _focusedId = 0;
     }
 
+    /// <summary>
+    /// Same client window, new sway view id (XWayland unmap+map). Keep the
+    /// host, capture and output, update the id/geometry, and put the window
+    /// back on its output so the crop stays valid.
+    /// </summary>
+    private void RekeyWindow(WindowState state, NestedWindowInfo window)
+    {
+        long oldId = state.Id;
+        lock (_stateGate) _states.Remove(oldId);
+        state.Id = window.Id;
+        state.Info = window;
+        state.MissingSince = 0;
+        lock (_stateGate) _states[state.Id] = state;
+        if (_focusedId == oldId) _focusedId = state.Id;
+        if (_toggleRequestedId == oldId) _toggleRequestedId = state.Id;
+
+        Emit($"nested window view re-created '{DescribeWindow(window)}' " +
+             $"id {oldId} -> {window.Id}; reusing host on '{state.OutputName}'");
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(state.OutputName))
+            {
+                _tracker?.MoveToOutput(window.Id, state.OutputName);
+                Thread.Sleep(30);
+                _tracker?.Poll(allowFullscreen: false);
+                if (_tracker?.AllWindows.FirstOrDefault(w => w.Id == window.Id) is { } moved)
+                    state.Info = moved;
+            }
+        }
+        catch (Exception ex)
+        {
+            Emit($"nested window rekey move failed for '{DescribeWindow(window)}': " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        UpdateStateGeometry(state);
+        state.ForceRender = true;
+    }
+
     private bool AddWindow(NestedWindowInfo window)
     {
         if (_pool is null || _tracker is null) return false;
@@ -391,6 +454,28 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Crop = crop;
             state.SourceWidth = crop.Width;
             state.SourceHeight = crop.Height;
+            string windowKey = WindowKey(window);
+            bool legacyLarge = window.FullscreenMode != 0 ||
+                (window.Rect.Height >= outputInfo.Rect.Height &&
+                 window.Rect.Width < outputInfo.Rect.Width &&
+                 window.Rect.Width >= outputInfo.Rect.Width * 0.65);
+            if (legacyLarge &&
+                _lastWindowedSizes.TryGetValue(windowKey, out var lastWindowed))
+            {
+                // Legacy games destroy the 800x600 window and create a new
+                // fullscreen-sized one. The new window's geometry is already
+                // 3840x2160, so use the size remembered from the window it
+                // replaced for the later windowed restore.
+                state.WindowedWidth = lastWindowed.Width;
+                state.WindowedHeight = lastWindowed.Height;
+            }
+            else
+            {
+                state.WindowedWidth = InitialWindowedSize(window.RequestedWidth,
+                    crop.Width, outputInfo.Rect.Width);
+                state.WindowedHeight = InitialWindowedSize(window.RequestedHeight,
+                    crop.Height, outputInfo.Rect.Height);
+            }
             state.LastGameFullscreen = window.FullscreenMode != 0;
 
             string title = WindowTitle(window);
@@ -416,6 +501,14 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Host.FocusChanged += focused => OnHostFocusChanged(state, focused);
             state.Host.Closed += () => state.CloseRequested = true;
             state.Host.CloseRequested += () => state.CloseRequested = true;
+
+            // The host draws through a Vulkan swapchain, which has no retained
+            // front buffer. If the compositor discards our window contents
+            // (occluded, newly mapped) and the game frame is static, the dirty
+            // diff would skip presenting and the host would stay black. An
+            // Expose must always force one fresh present.
+            state.Host.Exposed += () => state.ForceRender = true;
+            state.Host.Restored += () => RestoreMinimizedWindow(state);
 
             state.Blitter = new VulkanBlitter(state.Host.X11, state.Host.Window,
                 state.Host.Width, state.Host.Height, OriginalEffect,
@@ -492,6 +585,9 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Host.SetTitle(title);
         }
 
+        // v1.0: fullscreen is an explicit game state only. Do not promote large
+        // borderless Wine windows to sway fullscreen; those windows are
+        // presented as windowed, and windowed upscaling is the supported path.
         var crop = ComputeCrop(state.Info.Rect, state.OutputOrigin,
             state.Capture.Width, state.Capture.Height);
         bool sourceChanged = crop.Width != state.SourceWidth ||
@@ -500,17 +596,21 @@ public sealed class NestedUpscaleSession : IDisposable
         bool fullscreen = state.Info.FullscreenMode != 0;
         bool fullscreenChanged = fullscreen != state.LastGameFullscreen;
 
+        bool restoreSizeChanged = TrackWindowedSize(state, crop, output, fullscreen);
+
         state.Crop = crop;
         state.SourceWidth = crop.Width;
         state.SourceHeight = crop.Height;
         state.LastGameFullscreen = fullscreen;
+        RememberWindowedSize(state, fullscreen);
 
         if (state.Upscale)
         {
             if (sourceChanged)
             {
-                // Keep the windowed restore size current even while fullscreen.
-                state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
+                // Update only the restore geometry while the host is
+                // fullscreen. Never replace it with the fullscreen crop.
+                ApplyHostRestoreSize(state);
                 state.Diff.Reset();
                 state.ForceRender = true;
             }
@@ -521,22 +621,69 @@ public sealed class NestedUpscaleSession : IDisposable
         {
             ApplyOriginal(state);
         }
-        else if (sourceChanged)
+        else if (sourceChanged || restoreSizeChanged)
         {
-            state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
-            PumpHost(state, 6);
-            if (state.Host.Width != state.LastHostWidth ||
-                state.Host.Height != state.LastHostHeight)
+            ApplyHostRestoreSize(state);
+            if (!state.LastGameFullscreen)
             {
-                ReplaceBlitter(state, OriginalEffect);
-                state.LastHostWidth = state.Host.Width;
-                state.LastHostHeight = state.Host.Height;
+                PumpHost(state, 6);
+                if (state.Host.Width != state.LastHostWidth ||
+                    state.Host.Height != state.LastHostHeight)
+                {
+                    ReplaceBlitter(state, OriginalEffect);
+                    state.LastHostWidth = state.Host.Width;
+                    state.LastHostHeight = state.Host.Height;
+                }
             }
             state.Diff.Reset();
             state.ForceRender = true;
             Emit($"nested window '{DescribeWindow(state.Info)}' crop={state.Crop} " +
                  $"client={state.Host.Width}x{state.Host.Height}");
         }
+    }
+
+    private static string WindowKey(NestedWindowInfo info)
+        => $"{info.Pid}:{info.AppId ?? string.Empty}:{(info.Name ?? string.Empty).Trim()}";
+
+    private void RememberWindowedSize(WindowState state, bool effectiveFullscreen)
+    {
+        if (effectiveFullscreen) return;
+        if (state.WindowedWidth < 64 || state.WindowedHeight < 64) return;
+        _lastWindowedSizes[WindowKey(state.Info)] =
+            (state.WindowedWidth, state.WindowedHeight);
+    }
+
+    private static bool TrackWindowedSize(WindowState state, RectI crop,
+        SwayOutputInfo? output, bool effectiveFullscreen)
+    {
+        if (effectiveFullscreen) return false;
+        int outputWidth = output?.Rect.Width ?? 0;
+        int outputHeight = output?.Rect.Height ?? 0;
+        bool fillsOutput = outputWidth > 0 && outputHeight > 0 &&
+                            crop.Width >= outputWidth && crop.Height >= outputHeight;
+        if (fillsOutput && state.WindowedWidth > 0) return false;
+        if (crop.Width <= 0 || crop.Height <= 0) return false;
+
+        bool changed = state.WindowedWidth != crop.Width ||
+                       state.WindowedHeight != crop.Height;
+        state.WindowedWidth = crop.Width;
+        state.WindowedHeight = crop.Height;
+        return changed;
+    }
+
+    private static int InitialWindowedSize(int requested, int crop, int output)
+    {
+        if (requested >= 64 && requested < output) return requested;
+        return crop;
+    }
+
+    private static void ApplyHostRestoreSize(WindowState state)
+    {
+        if (state.Host is null) return;
+        int width = state.WindowedWidth > 0 ? state.WindowedWidth : state.SourceWidth;
+        int height = state.WindowedHeight > 0 ? state.WindowedHeight : state.SourceHeight;
+        if (width > 0 && height > 0)
+            state.Host.SetOriginalSize(width, height);
     }
 
     private void ApplyOriginal(WindowState state)
@@ -552,9 +699,11 @@ public sealed class NestedUpscaleSession : IDisposable
             }
             else
             {
-                state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
+                // Clear fullscreen first. SetOriginalSize must not be called
+                // with the fullscreen crop: it becomes KWin's restore size
+                // and leaves the "windowed" host at 4K without decorations.
                 state.Host.SetFullscreen(false);
-                state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
+                ApplyHostRestoreSize(state);
             }
             PumpHost(state, 8);
             ReplaceBlitter(state, OriginalEffect);
@@ -607,9 +756,8 @@ public sealed class NestedUpscaleSession : IDisposable
                 }
                 else
                 {
-                    state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
                     state.Host.SetFullscreen(false);
-                    state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
+                    ApplyHostRestoreSize(state);
                 }
             }
 
@@ -662,21 +810,133 @@ public sealed class NestedUpscaleSession : IDisposable
         }
     }
 
+    private void EnsureMinimizeProbe()
+    {
+        if (_probe is not null || _probeUnavailable) return;
+        string? display = _session.Display;
+        if (string.IsNullOrWhiteSpace(display))
+        {
+            _probeUnavailable = true;
+            Emit("nested minimize probe unavailable: nested DISPLAY unknown");
+            return;
+        }
+        try
+        {
+            _probe = new NestedWindowProbe(display);
+            Emit($"nested minimize probe attached to DISPLAY={display}");
+        }
+        catch (Exception ex)
+        {
+            _probeUnavailable = true;
+            Emit($"nested minimize probe unavailable ({display}): " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Mirror a game-side minimize onto the KDE host. wlroots marks the X11
+    /// window iconic but keeps its surface on the output, so without this the
+    /// host would keep showing the last (black) frame the client rendered
+    /// before it stopped painting.
+    /// </summary>
+    private void SyncMinimizedStates()
+    {
+        if (_probe is null) return;
+        long now = Environment.TickCount64;
+        if (now - _lastMinimizePoll < MinimizePollMs) return;
+        _lastMinimizePoll = now;
+
+        foreach (var state in _states.Values.ToList())
+        {
+            if (state.Ignored || state.Info.X11Window == 0) continue;
+            bool iconic;
+            try
+            {
+                iconic = _probe.IsIconified(state.Info.X11Window);
+            }
+            catch (Exception ex)
+            {
+                Emit($"nested minimize probe failed for '{DescribeWindow(state.Info)}': " +
+                     $"{ex.GetType().Name}: {ex.Message}");
+                continue;
+            }
+            if (iconic == state.Minimized) continue;
+
+            if (iconic)
+            {
+                state.Minimized = true;
+                state.Host?.Iconify();
+                Emit($"nested window '{DescribeWindow(state.Info)}' minimized; " +
+                     "mirroring minimize on host");
+            }
+            else
+            {
+                state.Minimized = false;
+                state.Host?.RestoreFromIconify();
+                state.ForceRender = true;
+                Emit($"nested window '{DescribeWindow(state.Info)}' restored; resuming host");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The user restored the KDE host from the taskbar. Ask the game window to
+    /// come back too, otherwise the host can only show the stale frame the
+    /// client left behind when it minimized itself.
+    /// </summary>
+    private void RestoreMinimizedWindow(WindowState state)
+    {
+        if (!state.Minimized) return;
+        state.Minimized = false;
+        state.ForceRender = true;
+        if (state.Info.X11Window == 0 || _probe is null) return;
+        Emit($"nested host restored; deiconifying '{DescribeWindow(state.Info)}'");
+        try
+        {
+            if (!_probe.Deiconify(state.Info.X11Window))
+                Emit($"nested window '{DescribeWindow(state.Info)}' could not be deiconified");
+        }
+        catch (Exception ex)
+        {
+            Emit($"nested window deiconify failed for '{DescribeWindow(state.Info)}': " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     private void OnHostFocusChanged(WindowState state, bool focused)
     {
+        // An iconified host is not on screen; do not let focus churn (which
+        // KWin emits while minimizing) switch nested focus or exit upscale.
+        if (state.Minimized)
+        {
+            Emit($"nested host focus id={state.Id} focused={focused} ignored (minimized)");
+            return;
+        }
         if (focused)
         {
-            if (state.Switching) return;
+            if (state.Switching)
+            {
+                Emit($"nested host focus id={state.Id} focused=true ignored (switching)");
+                return;
+            }
             _focusedId = state.Id;
-            try { _tracker?.FocusWindow(state.Id); } catch { }
+            bool nestedFocused = false;
+            try { nestedFocused = _tracker?.FocusWindow(state.Id) ?? false; } catch { }
+            Emit($"nested host focus id={state.Id} focused=true nested_focus_ok={nestedFocused}");
             if (state.Host is not null)
             {
                 state.Host.Show();
+                // Re-showing maps/raises an X11 window whose swapchain front
+                // buffer is gone; present once even if the game frame is
+                // static.
+                state.ForceRender = true;
                 PrepareInput(state);
             }
             return;
         }
 
+        Emit($"nested host focus id={state.Id} focused=false upscale={state.Upscale} " +
+             $"switching={state.Switching}");
         if (_focusedId == state.Id) _focusedId = 0;
         if (state.Upscale && !state.Switching)
             state.PendingOriginal = true;
@@ -684,6 +944,9 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void OnPointer(WindowState state, OverlayPointerEvent e)
     {
+        if (TraceInput)
+            Emit($"nested pointer trace kind={e.Kind} host={e.X},{e.Y} " +
+                 $"shell={state.Info.Shell} ignored={state.Ignored} switching={state.Switching}");
         if (state.Ignored || _input is null) return;
         if (e.Kind is OverlayPointerKind.ButtonPress or OverlayPointerKind.ButtonRelease
             or OverlayPointerKind.WheelUp or OverlayPointerKind.WheelDown or OverlayPointerKind.Axis &&
@@ -795,6 +1058,10 @@ public sealed class NestedUpscaleSession : IDisposable
     {
         if (state.Host is null || state.Blitter is null || state.Capture is null)
             return false;
+        // A minimized client stopped painting; capturing would only feed the
+        // stale/black frame into the (possibly still visible) host.
+        if (state.Minimized)
+            return false;
 
         if (state.Host.Width != state.LastHostWidth || state.Host.Height != state.LastHostHeight)
         {
@@ -817,8 +1084,7 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Crop = crop;
             state.SourceWidth = crop.Width;
             state.SourceHeight = crop.Height;
-            if (!state.Upscale) state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
-            else state.Host.SetOriginalSize(state.SourceWidth, state.SourceHeight);
+            ApplyHostRestoreSize(state);
             state.Diff.Reset();
             state.ForceRender = true;
         }
@@ -971,9 +1237,11 @@ public sealed class NestedUpscaleSession : IDisposable
         foreach (var state in states) DisposeStateResources(state);
 
         try { _input?.Dispose(); } catch (Exception ex) { Emit($"dispose input: {ex.Message}"); }
+        try { _probe?.Dispose(); } catch (Exception ex) { Emit($"dispose minimize probe: {ex.Message}"); }
         try { _tracker?.Dispose(); } catch (Exception ex) { Emit($"dispose tracker: {ex.Message}"); }
         try { _ipc?.Dispose(); } catch (Exception ex) { Emit($"dispose sway ipc: {ex.Message}"); }
         _input = null;
+        _probe = null;
         _tracker = null;
         _pool = null;
         _ipc = null;
@@ -1072,14 +1340,17 @@ public sealed class NestedUpscaleSession : IDisposable
     {
         public WindowState(long id) => Id = id;
 
-        public long Id { get; }
+        public long Id { get; set; }
         public NestedWindowInfo Info { get; set; } = null!;
+        public bool Minimized { get; set; }
         public string OutputName { get; set; } = string.Empty;
         public RectI OutputOrigin { get; set; }
         public NestedCapture? Capture { get; set; }
         public RectI Crop { get; set; }
         public int SourceWidth { get; set; }
         public int SourceHeight { get; set; }
+        public int WindowedWidth { get; set; }
+        public int WindowedHeight { get; set; }
         public NestedHostWindow? Host { get; set; }
         public VulkanBlitter? Blitter { get; set; }
         public bool Upscale { get; set; }

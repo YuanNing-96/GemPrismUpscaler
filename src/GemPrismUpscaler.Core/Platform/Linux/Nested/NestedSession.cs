@@ -94,6 +94,121 @@ public sealed class NestedSession : IDisposable
         return File.Exists("/usr/bin/swaymsg") ? "/usr/bin/swaymsg" : null;
     }
 
+    /// <summary>
+    /// Locate the bundled LD_PRELOAD shim that makes the nested compositor
+    /// advertise xdg-decoration version 2. Wine's Wayland driver only
+    /// negotiates server-side decorations when the compositor advertises
+    /// version &gt; 1; without it Wine draws its own Windows-style titlebar.
+    /// A missing shim is not fatal: sway still works, just with version 1.
+    /// </summary>
+    public static string? ResolveDecorationShimPath(string? swayPath)
+    {
+        const string fileName = "xdg-decoration-v2-shim.so";
+
+        if (!string.IsNullOrWhiteSpace(swayPath) &&
+            swayPath.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            try
+            {
+                string? dir = Path.GetDirectoryName(Path.GetFullPath(swayPath));
+                if (!string.IsNullOrWhiteSpace(dir))
+                {
+                    string candidate = Path.Combine(dir, fileName);
+                    if (File.Exists(candidate)) return candidate;
+                }
+            }
+            catch { }
+        }
+
+        string bundled = Path.Combine(AppContext.BaseDirectory, "runtime", "sway", fileName);
+        return File.Exists(bundled) ? bundled : null;
+    }
+
+    /// <summary>
+    /// Pick the render node of the discrete GPU for the nested compositor.
+    /// On hybrid systems wlroots otherwise picks the boot (iGPU) device while
+    /// GPU clients (Wine/vkd3d, QtWebEngine) allocate buffers on the dGPU;
+    /// cross-GPU DMA-BUF import then fails and those windows render black.
+    /// Users can override with GEMPRISM_WLR_RENDER_DRM_DEVICE (or by setting
+    /// WLR_RENDER_DRM_DEVICE themselves).
+    /// </summary>
+    public static string? ResolveRenderDevice()
+    {
+        string? explicitDevice = Environment.GetEnvironmentVariable("GEMPRISM_WLR_RENDER_DRM_DEVICE");
+        if (!string.IsNullOrWhiteSpace(explicitDevice)) return explicitDevice;
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WLR_RENDER_DRM_DEVICE")))
+            return null;
+
+        try
+        {
+            var candidates = new List<(string Node, long Vram)>();
+            foreach (string node in Directory.GetFiles("/dev/dri", "renderD*"))
+            {
+                string? card = FindCardForRenderNode(Path.GetFileName(node));
+                if (card is null) continue;
+                if (ReadSysLong($"/sys/class/drm/{card}/device/boot_vga") != 0) continue;
+                candidates.Add((node,
+                    ReadSysLong($"/sys/class/drm/{card}/device/mem_info_vram_total")));
+            }
+            return candidates.OrderByDescending(c => c.Vram).Select(c => c.Node).FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? FindCardForRenderNode(string renderName)
+    {
+        try
+        {
+            foreach (string cardDir in Directory.GetDirectories("/sys/class/drm", "card[0-9]*"))
+            {
+                string renderPath = Path.Combine(cardDir, "device", "drm", renderName);
+                if (Directory.Exists(renderPath) || File.Exists(renderPath))
+                    return Path.GetFileName(cardDir);
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static long ReadSysLong(string path)
+    {
+        try { return long.TryParse(File.ReadAllText(path).Trim(), out long value) ? value : 0; }
+        catch { return 0; }
+    }
+
+    private void LaunchSway(ProcessStartInfo psi)
+    {
+        Log.Info($"nested: starting sway path='{_swayPath}' output={_width}x{_height} runtime='{_runtimeDir}'");
+        _sway = Process.Start(psi) ?? throw new InvalidOperationException("failed to start sway");
+        _swayStderr = _sway.StandardError.ReadToEndAsync();
+        _ = _sway.StandardOutput.ReadToEndAsync();
+        WaitForSockets(TimeSpan.FromSeconds(8));
+        DiscoverDisplay(TimeSpan.FromSeconds(8));
+    }
+
+    private void AbortSway()
+    {
+        try { _sway?.Kill(entireProcessTree: true); } catch { }
+        try { _sway?.WaitForExit(2000); } catch { }
+        _sway = null;
+        _swayStderr = null;
+        if (_runtimeDir is null) return;
+        foreach (string pattern in new[] { "wayland-*", "sway-ipc.*.sock", "display.txt" })
+        {
+            try
+            {
+                foreach (string file in Directory.GetFiles(_runtimeDir, pattern))
+                {
+                    try { File.Delete(file); } catch { }
+                }
+            }
+            catch { }
+        }
+    }
+
     public void Start()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(NestedSession));
@@ -128,14 +243,49 @@ public sealed class NestedSession : IDisposable
         psi.Environment["WLR_LIBINPUT_NO_DEVICES"] = "1";
         psi.Environment[TokenEnv] = _token;
 
-        Log.Info($"nested: starting sway path='{_swayPath}' output={_width}x{_height} runtime='{_runtimeDir}'");
-        _sway = Process.Start(psi) ?? throw new InvalidOperationException("failed to start sway");
-        _swayStderr = _sway.StandardError.ReadToEndAsync();
-        _ = _sway.StandardOutput.ReadToEndAsync();
+        // Wine Wayland requires xdg-decoration version > 1 before it stops
+        // drawing its own titlebar. sway 1.12/wlroots 0.20 advertise version 1,
+        // so preload the small version shim that only bumps that global. Keep
+        // any LD_PRELOAD the user already set.
+        string? shim = ResolveDecorationShimPath(_swayPath);
+        if (shim is not null)
+        {
+            string? inheritedPreload = Environment.GetEnvironmentVariable("LD_PRELOAD");
+            psi.Environment["LD_PRELOAD"] = string.IsNullOrWhiteSpace(inheritedPreload)
+                ? shim
+                : shim + ":" + inheritedPreload;
+            Log.Info($"nested: preloading xdg-decoration v2 shim '{shim}'");
+        }
+        else
+        {
+            Log.Info("nested: xdg-decoration v2 shim not found; " +
+                     "nested sway will advertise decoration version 1");
+        }
 
-        WaitForSockets(TimeSpan.FromSeconds(8));
-        DiscoverDisplay(TimeSpan.FromSeconds(8));
-        Log.Info($"nested: sway pid={_sway.Id} wayland={WaylandDisplay} display={Display} " +
+        bool injectedDevice = false;
+        string? renderDevice = ResolveRenderDevice();
+        if (renderDevice is not null)
+        {
+            psi.Environment["WLR_RENDER_DRM_DEVICE"] = renderDevice;
+            injectedDevice = true;
+            Log.Info($"nested: render device '{renderDevice}' selected for the compositor " +
+                     "(discrete GPU; override with GEMPRISM_WLR_RENDER_DRM_DEVICE)");
+        }
+
+        try
+        {
+            LaunchSway(psi);
+        }
+        catch when (injectedDevice)
+        {
+            Log.Warn("nested: sway failed with the selected render device; " +
+                     "retrying with the compositor default GPU");
+            AbortSway();
+            psi.Environment.Remove("WLR_RENDER_DRM_DEVICE");
+            LaunchSway(psi);
+        }
+
+        Log.Info($"nested: sway pid={_sway!.Id} wayland={WaylandDisplay} display={Display} " +
                  $"swaysock={SwaySocket} token={_token}");
     }
 

@@ -54,6 +54,7 @@ internal static unsafe class X11Native
     public const int LeaveNotify = 8;
     public const int FocusIn = 9;
     public const int FocusOut = 10;
+    public const int Expose = 12;
     public const int MapNotify = 19;
     public const int ConfigureNotify = 22;
     public const int ClientMessage = 33;
@@ -63,6 +64,7 @@ internal static unsafe class X11Native
     public const int KeyPress = 2;
     public const int KeyRelease = 3;
     public const ulong XA_ATOM = 4;
+    public const ulong XA_CARDINAL = 6;
     public const ulong XA_WINDOW = 33;
     public const int PropModeReplace = 0;
 
@@ -297,7 +299,9 @@ internal static unsafe class X11Native
     [DllImport(X11)] public static extern int XChangeWindowAttributes(IntPtr display, ulong window, ulong valueMask, ref XSetWindowAttributes attributes);
     [DllImport(X11)] public static extern int XSelectInput(IntPtr display, ulong window, long eventMask);
     [DllImport(X11)] public static extern int XMapRaised(IntPtr display, ulong window);
+    [DllImport(X11)] public static extern int XMapWindow(IntPtr display, ulong window);
     [DllImport(X11)] public static extern int XUnmapWindow(IntPtr display, ulong window);
+    [DllImport(X11)] public static extern int XIconifyWindow(IntPtr display, ulong window, int screen);
     [DllImport(X11)] public static extern int XRaiseWindow(IntPtr display, ulong window);
     [DllImport(X11)] public static extern int XDestroyWindow(IntPtr display, ulong window);
     [DllImport(X11)] public static extern int XStoreName(IntPtr display, ulong window, [MarshalAs(UnmanagedType.LPStr)] string name);
@@ -306,6 +310,8 @@ internal static unsafe class X11Native
         ulong type, int format, int mode, ref ulong data, int nelements);
     [DllImport(X11)] public static extern int XChangeProperty(IntPtr display, ulong window, ulong property,
         ulong type, int format, int mode, byte[] data, int nelements);
+    [DllImport(X11)] public static extern int XChangeProperty(IntPtr display, ulong window, ulong property,
+        ulong type, int format, int mode, ulong[] data, int nelements);
     [DllImport(X11)] public static extern int XMoveResizeWindow(IntPtr display, ulong window,
         int x, int y, uint width, uint height);
     [DllImport(X11)] public static extern int XDeleteProperty(IntPtr display, ulong window, ulong property);

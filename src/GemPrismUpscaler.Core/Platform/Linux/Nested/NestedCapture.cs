@@ -37,6 +37,8 @@ public sealed class NestedCapture : IDisposable
     private readonly ZwlrScreencopyManagerV1 _manager;
     private readonly string _outputName;
     private byte[] _pixels = Array.Empty<byte>();
+    private byte[] _raw = Array.Empty<byte>();
+    private bool _warnedFormat;
     private long _sequence;
     private bool _disposed;
     private bool _sourceIsRgb = true;
@@ -140,9 +142,21 @@ public sealed class NestedCapture : IDisposable
             var listener = new FrameListener();
             listener.OnBuffer = (format, width, height, stride) =>
             {
-                if (format is not (WlShm.FormatEnum.Xbgr8888 or WlShm.FormatEnum.Argb8888))
-                    Log.Warn($"nested capture: unexpected shm format {format}");
-                listener.SwapRedBlue = format is WlShm.FormatEnum.Xbgr8888 or WlShm.FormatEnum.Argb8888;
+                // wlroots picks the read format from the renderer. GLES2 on
+                // NVIDIA reports Bgr888 (24 bpp); other renderers use
+                // Xbgr8888/Argb8888 (32 bpp). Accept both and normalise.
+                bool handled = format is WlShm.FormatEnum.Xbgr8888
+                    or WlShm.FormatEnum.Argb8888
+                    or WlShm.FormatEnum.Bgr888
+                    or WlShm.FormatEnum.Rgb888;
+                if (!handled && !_warnedFormat)
+                {
+                    _warnedFormat = true;
+                    Log.Warn($"nested capture: unexpected shm format {format}; " +
+                             "pixels will be interpreted as 32-bit BGRA");
+                }
+                listener.Format = format;
+                listener.SwapRedBlue = handled;
                 pool = _shm.CreatePool(fd, size, new ShmPoolListener(), null);
                 buffer = pool.CreateBuffer(0, (int)width, (int)height, (int)stride, format,
                     new BufferListener(), null);
@@ -160,19 +174,30 @@ public sealed class NestedCapture : IDisposable
             if (!listener.IsReady || listener.Width == 0 || listener.Height == 0)
                 return false;
 
-            if (listener.Width != Width || listener.Height != Height || listener.Stride != Stride)
+            if (listener.Width != Width || listener.Height != Height)
             {
                 Width = (int)listener.Width;
                 Height = (int)listener.Height;
-                Stride = (int)listener.Stride;
+                // The managed frame is always 32-bit BGRA regardless of the
+                // compositor's read format.
+                Stride = Width * 4;
                 _pixels = new byte[Stride * Height];
                 Log.Info($"nested capture: resized {Width}x{Height} stride={Stride}");
             }
 
-            Marshal.Copy(ptr, _pixels, 0, Stride * Height);
-            // Xbgr8888/Argb8888 is RGBX in memory; the Vulkan source image uses
-            // R8G8B8A8 for this path, so no red/blue CPU swap is needed.
-            _sourceIsRgb = listener.SwapRedBlue;
+            int srcStride = (int)listener.Stride;
+            if (srcStride <= 0) srcStride = Width * 4;
+            int srcLength = srcStride * Height;
+            if (srcLength > size)
+            {
+                Log.Warn($"nested capture: buffer too small for " +
+                         $"{Width}x{Height} srcStride={srcStride} (size={size})");
+                return false;
+            }
+            if (_raw.Length < srcLength) _raw = new byte[srcLength];
+            Marshal.Copy(ptr, _raw, 0, srcLength);
+            ConvertToBgra(_raw, srcStride, Height, listener.Format);
+            _sourceIsRgb = true;
             Interlocked.Increment(ref _sequence);
             frame = new NestedFrame(Width, Height, Stride, Sequence);
             return true;
@@ -192,27 +217,37 @@ public sealed class NestedCapture : IDisposable
     }
 
     /// <summary>
-    /// wl_shm Xbgr8888/Argb8888 is RGBX in memory on little-endian; the Vulkan
-    /// upload path expects BGRA. Swap red/blue and make the X byte opaque.
+    /// Normalise the compositor's read format into 32-bit BGRA. GLES2 on
+    /// NVIDIA returns Bgr888 (24 bpp), other renderers return Xbgr8888 /
+    /// Argb8888 (32 bpp); Bgr888 needs an explicit 3-to-4 byte expansion.
     /// </summary>
-    private void NormalizeBgra(bool swapRedBlue)
+    private void ConvertToBgra(byte[] src, int srcStride, int height,
+        WlShm.FormatEnum format)
     {
-        var pixels = _pixels.AsSpan(0, Stride * Height);
-        if (swapRedBlue)
+        int dstStride = Stride;
+        if (format is WlShm.FormatEnum.Bgr888 or WlShm.FormatEnum.Rgb888)
         {
-            for (int i = 0; i + 3 < pixels.Length; i += 4)
+            bool rgb = format == WlShm.FormatEnum.Rgb888;
+            for (int y = 0; y < height; y++)
             {
-                byte b = pixels[i];
-                pixels[i] = pixels[i + 2];
-                pixels[i + 2] = b;
-                pixels[i + 3] = 255;
+                int s = y * srcStride;
+                int d = y * dstStride;
+                for (int x = 0; x < Width && s + 2 < src.Length; x++, s += 3, d += 4)
+                {
+                    byte c0 = src[s], c1 = src[s + 1], c2 = src[s + 2];
+                    _pixels[d] = rgb ? c2 : c0;
+                    _pixels[d + 1] = c1;
+                    _pixels[d + 2] = rgb ? c0 : c2;
+                    _pixels[d + 3] = 255;
+                }
             }
+            return;
         }
-        else
-        {
-            for (int i = 3; i < pixels.Length; i += 4)
-                pixels[i] = 255;
-        }
+
+        // 32-bit formats: copy row by row so differing strides are safe.
+        int copy = Math.Min(dstStride, srcStride);
+        for (int y = 0; y < height; y++)
+            Buffer.BlockCopy(src, y * srcStride, _pixels, y * dstStride, copy);
     }
 
     public ReadOnlySpan<byte> Pixels => _pixels;
@@ -261,6 +296,7 @@ public sealed class NestedCapture : IDisposable
         public bool IsReady;
         public bool IsFailed;
         public bool SwapRedBlue;
+        public WlShm.FormatEnum Format;
         public uint Width;
         public uint Height;
         public uint Stride;

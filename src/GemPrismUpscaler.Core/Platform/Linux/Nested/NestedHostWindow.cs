@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
@@ -16,11 +17,16 @@ public sealed class NestedHostWindow : IDisposable
     private readonly X11Display _display;
     private readonly MonitorInfo _monitor;
     private readonly ulong _fullscreenAtom;
+    private readonly ulong _maximizedVertAtom;
+    private readonly ulong _maximizedHorzAtom;
+    private readonly ulong _fullscreenMonitorsAtom;
+    private readonly int _monitorIndex;
     private readonly ulong _deleteWindowAtom;
     private readonly ulong _wmProtocolsAtom;
     private bool _disposed;
     private bool _focused;
     private bool _fullscreen;
+    private bool _iconified;
     private int _originalWidth;
     private int _originalHeight;
     private int _width;
@@ -43,6 +49,18 @@ public sealed class NestedHostWindow : IDisposable
     public event Action<OverlayKeyEvent>? Key;
     public event Action<OverlayModifiers>? Modifiers;
     public event Action<bool>? FocusChanged;
+    /// <summary>
+    /// The X server asked us to repaint (newly mapped, uncovered, resized).
+    /// A Vulkan swapchain keeps no reusable front buffer, so the session must
+    /// re-present the last frame; otherwise a static game/launcher stays black
+    /// until its pixels happen to change.
+    /// </summary>
+    public event Action? Exposed;
+    /// <summary>
+    /// KWin mapped the host again after we mirrored a game-side minimize.
+    /// The session uses this to deiconify the inner game window.
+    /// </summary>
+    public event Action? Restored;
     public event Action? Closed;
     public event Action? CloseRequested;
 
@@ -70,13 +88,19 @@ public sealed class NestedHostWindow : IDisposable
         }
         if (monitor.Width <= 0) monitor = monitors[0];
         _monitor = monitor;
+        _monitorIndex = Math.Max(0, monitors.FindIndex(m =>
+            string.Equals(m.Name, monitor.Name, StringComparison.OrdinalIgnoreCase)));
         Log.Info($"nested host monitor requested='{outputName ?? "auto"}' " +
                  $"selected='{monitor.Name}' geometry={monitor.X},{monitor.Y} {monitor.Width}x{monitor.Height} " +
                  $"available={string.Join(", ", monitors.Select(m => $"{m.Name}:{m.Width}x{m.Height}"))}");
 
         _originalWidth = Math.Max(64, originalWidth);
         _originalHeight = Math.Max(64, originalHeight);
-        _fullscreen = startFullscreen;
+        // Do not pre-set _NET_WM_STATE before mapping. KWin ignores/clears a
+        // fullscreen property that is written directly, and later treats the
+        // client as a maximized window with decorations. Start windowed at the
+        // restore size, map, then request fullscreen through EWMH.
+        _fullscreen = false;
         _deleteWindowAtom = X11Native.XInternAtom(_display.Handle, "WM_DELETE_WINDOW", 0);
         _wmProtocolsAtom = X11Native.XInternAtom(_display.Handle, "WM_PROTOCOLS", 0);
 
@@ -106,6 +130,7 @@ public sealed class NestedHostWindow : IDisposable
                     X11Native.ButtonPressMask | X11Native.ButtonReleaseMask |
                     X11Native.PointerMotionMask | X11Native.EnterWindowMask |
                     X11Native.LeaveWindowMask | X11Native.FocusChangeMask |
+                    X11Native.ExposureMask |
                     X11Native.StructureNotifyMask;
         X11Native.XSelectInput(_display.Handle, Window, mask);
 
@@ -113,7 +138,12 @@ public sealed class NestedHostWindow : IDisposable
         X11Native.XSetWMHints(_display.Handle, Window, ref hints);
         SetTitle(title);
         _fullscreenAtom = X11Native.XInternAtom(_display.Handle, "_NET_WM_STATE_FULLSCREEN", 0);
-        if (_fullscreen) SetFullscreenProperty(true);
+        _maximizedVertAtom = X11Native.XInternAtom(_display.Handle,
+            "_NET_WM_STATE_MAXIMIZED_VERT", 0);
+        _maximizedHorzAtom = X11Native.XInternAtom(_display.Handle,
+            "_NET_WM_STATE_MAXIMIZED_HORZ", 0);
+        _fullscreenMonitorsAtom = X11Native.XInternAtom(_display.Handle,
+            "_NET_WM_FULLSCREEN_MONITORS", 0);
         X11Native.XMapRaised(_display.Handle, Window);
         _display.Sync();
         IsVisible = true;
@@ -123,6 +153,7 @@ public sealed class NestedHostWindow : IDisposable
             Pump();
         }
         UpdateGeometry();
+        if (startFullscreen) SetFullscreen(true);
     }
 
     private void SetDialogProperties(ulong transientFor, bool dialog)
@@ -152,53 +183,126 @@ public sealed class NestedHostWindow : IDisposable
         }
     }
 
-    private void SetFullscreenProperty(bool enabled)
-    {
-        if (enabled)
-        {
-            if (_fullscreenAtom == 0) return;
-            ulong atom = _fullscreenAtom;
-            X11Native.XChangeProperty(_display.Handle, Window, _display.AtomNetWmState,
-                X11Native.XA_ATOM, 32, X11Native.PropModeReplace, ref atom, 1);
-        }
-        else
-        {
-            X11Native.XDeleteProperty(_display.Handle, Window, _display.AtomNetWmState);
-        }
-    }
-
     public void SetFullscreen(bool fullscreen)
     {
         if (_disposed || _fullscreen == fullscreen) return;
         _fullscreen = fullscreen;
-        SetFullscreenProperty(fullscreen);
-        SendWmState(fullscreen);
+
         if (fullscreen)
         {
-            X11Native.XMoveResizeWindow(_display.Handle, Window,
-                _monitor.X, _monitor.Y, (uint)_monitor.Width, (uint)_monitor.Height);
-            X = _monitor.X;
-            Y = _monitor.Y;
-            _width = _monitor.Width;
-            _height = _monitor.Height;
+            // Pin the fullscreen request to the monitor selected for this
+            // nested output. Without this KWin may fullscreen on whichever
+            // monitor currently has the active window.
+            if (_fullscreenMonitorsAtom != 0)
+            {
+                ulong[] monitorIndex = { (ulong)_monitorIndex, (ulong)_monitorIndex,
+                    (ulong)_monitorIndex, (ulong)_monitorIndex };
+                X11Native.XChangeProperty(_display.Handle, Window,
+                    _fullscreenMonitorsAtom, X11Native.XA_CARDINAL, 32,
+                    X11Native.PropModeReplace, monitorIndex, 4);
+                _display.Sync();
+            }
+
+            // Clear a previous maximize first. Otherwise KWin remembers the
+            // maximized restore geometry and a later fullscreen exit returns
+            // to a 4K maximized window instead of the original 800x600.
+            SendWmStateChange(0, _maximizedVertAtom, _maximizedHorzAtom);
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                SendWmStateChange(1, _fullscreenAtom, 0);
+                if (WaitForWmState(fullscreen: true, noMaximized: true,
+                        _monitor.Width, _monitor.Height, 220))
+                    break;
+                Log.Warn($"nested host fullscreen not applied yet " +
+                         $"client={_width}x{_height} target={_monitor.Width}x{_monitor.Height}");
+            }
         }
         else
         {
+            // Do not just resize out of fullscreen: KWin still owns the
+            // fullscreen/maximized state and will clamp the request to the
+            // decorated work area. Clear the EWMH states, wait for KWin, then
+            // apply the windowed restore geometry.
+            SendWmStateChange(0, _fullscreenAtom, 0);
+            SendWmStateChange(0, _maximizedVertAtom, _maximizedHorzAtom);
+            WaitForWmState(fullscreen: false, noMaximized: true,
+                0, 0, 300);
+
             X = _monitor.X + (_monitor.Width - _originalWidth) / 2;
             Y = _monitor.Y + (_monitor.Height - _originalHeight) / 2;
-            _width = _originalWidth;
-            _height = _originalHeight;
             X11Native.XMoveResizeWindow(_display.Handle, Window, X, Y,
-                (uint)_width, (uint)_height);
+                (uint)_originalWidth, (uint)_originalHeight);
+            _display.Sync();
+            WaitForClientSize(_originalWidth, _originalHeight, 220);
         }
-        _display.Sync();
+
         Pump();
         UpdateGeometry();
     }
 
-    private void SendWmState(bool enabled)
+    private bool WaitForWmState(bool fullscreen, bool noMaximized,
+        int width, int height, int timeoutMs)
     {
-        if (_fullscreenAtom == 0) return;
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            Pump();
+            UpdateGeometry();
+            bool isFullscreen = HasWmState(_fullscreenAtom);
+            bool isMaximized = HasWmState(_maximizedVertAtom) ||
+                               HasWmState(_maximizedHorzAtom);
+            bool sizeMatches = width <= 0 || (_width == width && _height == height);
+            if (isFullscreen == fullscreen && (!noMaximized || !isMaximized) && sizeMatches)
+                return true;
+            Thread.Sleep(10);
+        }
+        Pump();
+        UpdateGeometry();
+        return HasWmState(_fullscreenAtom) == fullscreen;
+    }
+
+    private bool HasWmState(ulong atom)
+    {
+        if (atom == 0 || _display.AtomNetWmState == 0) return false;
+        int status = X11Native.XGetWindowProperty(_display.Handle, Window,
+            _display.AtomNetWmState, 0, 64, 0, X11Native.XA_ATOM,
+            out ulong actualType, out int actualFormat, out ulong nitems,
+            out _, out IntPtr prop);
+        if (status != 0 || actualType != X11Native.XA_ATOM ||
+            actualFormat != 32 || prop == IntPtr.Zero)
+            return false;
+        try
+        {
+            int count = (int)Math.Min(nitems, 64UL);
+            for (int i = 0; i < count; i++)
+            {
+                if ((ulong)Marshal.ReadInt64(prop, i * 8) == atom) return true;
+            }
+            return false;
+        }
+        finally
+        {
+            X11Native.XFree(prop);
+        }
+    }
+
+    private bool WaitForClientSize(int width, int height, int timeoutMs)
+    {
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            Pump();
+            UpdateGeometry();
+            if (_width == width && _height == height) return true;
+            Thread.Sleep(10);
+        }
+        UpdateGeometry();
+        return _width == width && _height == height;
+    }
+
+    private void SendWmStateChange(int action, ulong first, ulong second)
+    {
+        if (first == 0) return;
         var ev = new X11Native.XClientMessageEvent
         {
             Type = X11Native.ClientMessage,
@@ -207,8 +311,9 @@ public sealed class NestedHostWindow : IDisposable
             Window = Window,
             MessageType = _display.AtomNetWmState,
             Format = 32,
-            Data0 = enabled ? 1 : 0,
-            Data1 = (long)_fullscreenAtom,
+            Data0 = action,
+            Data1 = (long)first,
+            Data2 = (long)second,
             Data3 = 1
         };
         X11Native.XSendEvent(_display.Handle, _display.Root, 0,
@@ -242,6 +347,33 @@ public sealed class NestedHostWindow : IDisposable
             if (w > 0) _width = (int)w;
             if (h > 0) _height = (int)h;
         }
+    }
+
+    /// <summary>
+    /// Mirror a game-side minimize: ask KWin to iconify this host so it goes
+    /// to the taskbar instead of showing the stale/black frame the nested
+    /// client stopped rendering.
+    /// </summary>
+    public void Iconify()
+    {
+        if (_disposed) return;
+        _iconified = true;
+        X11Native.XIconifyWindow(_display.Handle, Window, _display.Screen);
+        _display.Sync();
+    }
+
+    /// <summary>
+    /// Map the host again without stealing focus. Used when the inner window
+    /// un-minimizes on its own, or while we restore it in response to the user
+    /// restoring the host from the taskbar.
+    /// </summary>
+    public void RestoreFromIconify()
+    {
+        if (_disposed) return;
+        _iconified = false;
+        X11Native.XMapRaised(_display.Handle, Window);
+        IsVisible = true;
+        _display.Sync();
     }
 
     public void Focus()
@@ -343,6 +475,16 @@ public sealed class NestedHostWindow : IDisposable
                         break;
                     case X11Native.ConfigureNotify:
                         UpdateGeometry();
+                        break;
+                    case X11Native.Expose:
+                        Exposed?.Invoke();
+                        break;
+                    case X11Native.MapNotify:
+                        if (_iconified)
+                        {
+                            _iconified = false;
+                            Restored?.Invoke();
+                        }
                         break;
                     case X11Native.MotionNotify:
                         Pointer?.Invoke(new OverlayPointerEvent(OverlayPointerKind.Motion, ev.X, ev.Y));

@@ -18,7 +18,8 @@ public sealed record NestedWindowInfo(
     bool Focused,
     int? TransientFor,
     string? WindowType,
-    bool Visible)
+    bool Visible,
+    ulong X11Window)
 {
     public int RequestedWidth => Geometry.Width > 0 ? Geometry.Width : WindowRect.Width > 0 ? WindowRect.Width : Rect.Width;
     public int RequestedHeight => Geometry.Height > 0 ? Geometry.Height : WindowRect.Height > 0 ? WindowRect.Height : Rect.Height;
@@ -433,7 +434,8 @@ public sealed class NestedWindowTracker : IDisposable
             GetBool(node, "focused"),
             transientFor,
             windowType,
-            node.TryGetProperty("visible", out var visible) ? visible.GetBoolean() : true);
+            node.TryGetProperty("visible", out var visible) ? visible.GetBoolean() : true,
+            (ulong)(GetLong(node, "window") ?? 0));
     }
 
     private static bool SameWindow(NestedWindowInfo? a, NestedWindowInfo? b)

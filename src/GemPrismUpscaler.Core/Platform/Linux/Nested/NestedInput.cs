@@ -14,6 +14,9 @@ namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 /// </summary>
 public sealed class NestedInput : IDisposable
 {
+    private static readonly bool TraceInput =
+        Environment.GetEnvironmentVariable("GEMPRISM_TRACE_INPUT") == "1";
+
     private readonly X11Display? _x11;
     private readonly WlDisplay? _wayland;
     private readonly ZwlrVirtualPointerV1? _virtualPointer;
@@ -28,6 +31,10 @@ public sealed class NestedInput : IDisposable
     private int _layoutWidth;
     private int _layoutHeight;
     private bool _xwayland = true;
+    private bool _warnedNoPointer;
+    private bool _havePointerPosition;
+    private int _lastPointerX;
+    private int _lastPointerY;
     private bool _disposed;
 
     public NestedInput(string? x11Display, string? waylandDisplay)
@@ -114,31 +121,48 @@ public sealed class NestedInput : IDisposable
     public void HandlePointer(OverlayPointerEvent e)
     {
         if (_mapper is null || _disposed) return;
-        if (e.Kind is OverlayPointerKind.Leave) return;
-        if (!_mapper.Value.TryMap(e.X, e.Y, out int x, out int y)) return;
+        if (e.Kind is OverlayPointerKind.Leave)
+        {
+            _havePointerPosition = false;
+            return;
+        }
+        if (!_mapper.Value.TryMap(e.X, e.Y, out int x, out int y))
+        {
+            if (TraceInput)
+                Log.Info($"nested input trace: host={e.X},{e.Y} outside dest; dropped");
+            _havePointerPosition = false;
+            return;
+        }
         int outputX = _outputOriginX + _cropX + x;
         int outputY = _outputOriginY + _cropY + y;
+        if (TraceInput)
+            Log.Info($"nested input trace: host={e.X},{e.Y} kind={e.Kind} " +
+                     $"crop={_cropX},{_cropY} output={outputX},{outputY} " +
+                     $"xwayland={_xwayland} vp={_virtualPointer is not null} " +
+                     $"vk={_vkeyboard is not null}");
 
         switch (e.Kind)
         {
             case OverlayPointerKind.Motion:
+                SendPointerPosition(outputX, outputY, forceAbsolute: false);
+                break;
             case OverlayPointerKind.Enter:
-                SendMotionAbsolute(outputX, outputY);
+                SendPointerPosition(outputX, outputY, forceAbsolute: true);
                 break;
             case OverlayPointerKind.ButtonPress:
-                SendMotionAbsolute(outputX, outputY);
+                SendPointerPosition(outputX, outputY, forceAbsolute: false);
                 SendButton(e.Button, pressed: true);
                 break;
             case OverlayPointerKind.ButtonRelease:
-                SendMotionAbsolute(outputX, outputY);
+                SendPointerPosition(outputX, outputY, forceAbsolute: false);
                 SendButton(e.Button, pressed: false);
                 break;
             case OverlayPointerKind.WheelUp:
-                SendMotionAbsolute(outputX, outputY);
+                SendPointerPosition(outputX, outputY, forceAbsolute: false);
                 SendWheel(-1);
                 break;
             case OverlayPointerKind.WheelDown:
-                SendMotionAbsolute(outputX, outputY);
+                SendPointerPosition(outputX, outputY, forceAbsolute: false);
                 SendWheel(1);
                 break;
             case OverlayPointerKind.Axis:
@@ -171,11 +195,14 @@ public sealed class NestedInput : IDisposable
         _vkeyboard?.Modifiers(modifiers);
     }
 
-    private void SendMotionAbsolute(int x, int y)
+    /// <summary>
+    /// Native Wayland games often request a persistent pointer lock. A locked
+    /// pointer ignores absolute motion, but the compositor still reports
+    /// relative deltas, so position the pointer once and then follow the host
+    /// mouse with relative motion. XWayland keeps using XWarpPointer.
+    /// </summary>
+    private void SendPointerPosition(int x, int y, bool forceAbsolute)
     {
-        // For XWayland clients the compositor's virtual pointer does not
-        // reliably move the XWayland cursor, so use XWarpPointer there. The
-        // virtual pointer remains the native Wayland path.
         if (_xwayland && _x11 is not null)
         {
             X11Native.XWarpPointer(_x11.Handle, 0, _x11.Root, 0, 0, 0, 0, x, y);
@@ -183,18 +210,47 @@ public sealed class NestedInput : IDisposable
             return;
         }
 
-        if (_virtualPointer is not null && _mapper is not null)
+        if (_virtualPointer is null)
         {
-            uint time = (uint)Environment.TickCount64;
+            if (!_warnedNoPointer)
+            {
+                _warnedNoPointer = true;
+                Log.Warn("nested input: virtual pointer missing; pointer events are dropped");
+            }
+            return;
+        }
+
+        uint time = (uint)Environment.TickCount64;
+        if (forceAbsolute || !_havePointerPosition)
+        {
+            if (TraceInput)
+                Log.Info($"nested input trace: ABSOLUTE pos={x},{y} " +
+                         $"force={forceAbsolute} have={_havePointerPosition} " +
+                         $"extents={Math.Max(_outputWidth, _layoutWidth)}x" +
+                         $"{Math.Max(_outputHeight, _layoutHeight)}");
             // wlr-virtual-pointer absolute motion uses the compositor's global
             // layout extents, not the local output size, once several outputs
             // exist side by side.
             _virtualPointer.MotionAbsolute(time, (uint)Math.Max(0, x), (uint)Math.Max(0, y),
                 (uint)Math.Max(_outputWidth, _layoutWidth),
                 (uint)Math.Max(_outputHeight, _layoutHeight));
-            _virtualPointer.Frame();
-            _wayland?.Flush();
         }
+        else
+        {
+            double dx = x - _lastPointerX;
+            double dy = y - _lastPointerY;
+            if (TraceInput)
+                Log.Info($"nested input trace: RELATIVE dx={dx} dy={dy} " +
+                         $"from={_lastPointerX},{_lastPointerY} to={x},{y}");
+            if (dx != 0 || dy != 0)
+                _virtualPointer.Motion(time, new WlFixed(dx), new WlFixed(dy));
+        }
+
+        _lastPointerX = x;
+        _lastPointerY = y;
+        _havePointerPosition = true;
+        _virtualPointer.Frame();
+        _wayland?.Flush();
     }
 
     private void SendButton(int button, bool pressed)
