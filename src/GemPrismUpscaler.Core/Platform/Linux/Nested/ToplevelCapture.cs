@@ -262,6 +262,30 @@ public sealed class ToplevelCapture : INestedFrameSource
         }
     }
 
+    /// <summary>
+    /// Recreate the capture session. The first frame of a new session is always
+    /// copied by the compositor, so this yields a fresh frame even when the
+    /// source content is static. Needed after the host recreates its swapchain
+    /// (window/fullscreen switch), otherwise the new window stays black until
+    /// the game repaints.
+    /// </summary>
+    public void RestartSession()
+    {
+        if (_disposed || _source is null) return;
+        DestroyPending();
+        try { _session?.Destroy(); } catch { }
+        _session = null;
+        _constraintsDone = false;
+        _sizeDirty = true;
+        DestroyBuffer();
+        _session = _manager.CreateSession(_source,
+            (ExtImageCopyCaptureManagerV1.OptionsEnum)0, new SessionListener(this), null);
+        var deadline = Stopwatch.StartNew();
+        while (!_constraintsDone && deadline.ElapsedMilliseconds < 1500)
+            Pump(50);
+        EnsureBuffer();
+    }
+
     private void DestroyPending()
     {
         try { _pending.Frame?.Destroy(); } catch { }

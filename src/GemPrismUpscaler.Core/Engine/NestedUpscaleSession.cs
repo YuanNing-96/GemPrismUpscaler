@@ -519,6 +519,7 @@ public sealed class NestedUpscaleSession : IDisposable
             bool focusNew = dialog || _states.Count == 0;
             ulong parentWindow = dialog ? ParentHostWindow(window.TransientFor) : 0;
             state.Info = window;
+            state.IsDialog = dialog;
             state.Host = new NestedHostWindow(_monitorName, title,
                 state.SourceWidth, state.SourceHeight,
                 startFullscreen: state.LastGameFullscreen,
@@ -816,6 +817,10 @@ public sealed class NestedUpscaleSession : IDisposable
             PumpHost(state, 10);
             state.Upscale = upscale;
             ReplaceBlitter(state, upscale ? _effect : OriginalEffect);
+            // The swapchain was just recreated; a fresh capture session always
+            // delivers its first frame, so a static game is not left black.
+            if (state.Capture is ToplevelCapture toplevelCapture)
+                toplevelCapture.RestartSession();
             state.LastHostWidth = state.Host.Width;
             state.LastHostHeight = state.Host.Height;
             state.Diff.Reset();
@@ -1030,6 +1035,11 @@ public sealed class NestedUpscaleSession : IDisposable
         if (e.KeyCode == 30 && e.State == OverlayKeyState.Pressed &&
             (_modifiers.Depressed & 1) != 0 && (_modifiers.Depressed & 8) != 0)
         {
+            if (state.IsDialog)
+            {
+                Emit($"nested upscale ignored for dialog '{DescribeWindow(state.Info)}'");
+                return;
+            }
             long now = Environment.TickCount64;
             if (now - Interlocked.Read(ref _lastToggleAt) >= 300)
             {
@@ -1122,6 +1132,8 @@ public sealed class NestedUpscaleSession : IDisposable
             state.LastHostWidth = state.Host.Width;
             state.LastHostHeight = state.Host.Height;
             ReplaceBlitter(state, state.Upscale ? _effect : OriginalEffect);
+            if (state.Capture is ToplevelCapture resizedCapture)
+                resizedCapture.RestartSession();
             state.Diff.Reset();
             state.ForceRender = true;
         }
@@ -1418,6 +1430,7 @@ public sealed class NestedUpscaleSession : IDisposable
         public long Id { get; set; }
         public NestedWindowInfo Info { get; set; } = null!;
         public bool Minimized { get; set; }
+        public bool IsDialog { get; set; }
         public string OutputName { get; set; } = string.Empty;
         public RectI OutputOrigin { get; set; }
         public INestedFrameSource? Capture { get; set; }
