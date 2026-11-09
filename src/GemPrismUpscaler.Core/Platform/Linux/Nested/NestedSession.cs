@@ -196,9 +196,34 @@ public sealed class NestedSession : IDisposable
     private void LaunchSway(ProcessStartInfo psi)
     {
         Log.Info($"nested: starting sway path='{_swayPath}' output={_width}x{_height} runtime='{_runtimeDir}'");
-        _sway = Process.Start(psi) ?? throw new InvalidOperationException("failed to start sway");
-        _swayStderr = _sway.StandardError.ReadToEndAsync();
-        _ = _sway.StandardOutput.ReadToEndAsync();
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("failed to start sway");
+        _sway = process;
+        // Keep the compositor's own stderr: it is where wlroots reports
+        // dmabuf/EGL import failures, which look like a black client area.
+        string stderrPath = Path.Combine(Path.GetTempPath(),
+            $"gemprism-sway-{Environment.ProcessId}-{_token}.log");
+        Log.Info($"nested: sway stderr log '{stderrPath}'");
+        _swayStderr = Task.Run(async () =>
+        {
+            var text = new System.Text.StringBuilder();
+            try
+            {
+                await using var file = new StreamWriter(stderrPath, append: false) { AutoFlush = true };
+                string? line;
+                while ((line = await process.StandardError.ReadLineAsync()) is not null)
+                {
+                    text.AppendLine(line);
+                    await file.WriteLineAsync(line);
+                    if (line.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("dmabuf", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                        Log.Warn($"sway: {line}");
+                }
+            }
+            catch { }
+            return text.ToString();
+        });
+        _ = process.StandardOutput.ReadToEndAsync();
         WaitForSockets(TimeSpan.FromSeconds(8));
         DiscoverDisplay(TimeSpan.FromSeconds(8));
     }
