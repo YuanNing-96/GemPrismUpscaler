@@ -105,6 +105,10 @@ public sealed class NestedSession : IDisposable
     {
         const string fileName = "xdg-decoration-v2-shim.so";
 
+        string? explicitShim = Environment.GetEnvironmentVariable("GEMPRISM_DECORATION_SHIM");
+        if (!string.IsNullOrWhiteSpace(explicitShim) && File.Exists(explicitShim))
+            return explicitShim;
+
         if (!string.IsNullOrWhiteSpace(swayPath) &&
             swayPath.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
@@ -120,8 +124,17 @@ public sealed class NestedSession : IDisposable
             catch { }
         }
 
-        string bundled = Path.Combine(AppContext.BaseDirectory, "runtime", "sway", fileName);
-        return File.Exists(bundled) ? bundled : null;
+        foreach (string candidate in new[]
+                 {
+                     Path.Combine(AppContext.BaseDirectory, "runtime", "sway", fileName),
+                     Path.Combine(AppContext.BaseDirectory, "runtime", fileName),
+                     Path.Combine(Environment.CurrentDirectory, ".agent", "m2b-runtime", fileName),
+                     Path.Combine(Environment.CurrentDirectory, "runtime", fileName)
+                 })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
     }
 
     /// <summary>

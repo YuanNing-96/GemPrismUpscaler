@@ -1006,6 +1006,16 @@ public sealed class NestedUpscaleSession : IDisposable
             Emit($"nested pointer trace kind={e.Kind} host={e.X},{e.Y} " +
                  $"shell={state.Info.Shell} ignored={state.Ignored} switching={state.Switching}");
         if (state.Ignored || _input is null) return;
+        // Do not forward input into a window that has not presented a frame
+        // yet. A synthetic click arriving during Wine's window/renderer
+        // initialization can leave the game stuck (observed with 腐姬).
+        if (!state.SawFirstFrame)
+        {
+            if (TraceInput)
+                Emit($"nested input trace: dropped {e.Kind} before first frame " +
+                     $"'{DescribeWindow(state.Info)}'");
+            return;
+        }
         if (e.Kind is OverlayPointerKind.ButtonPress or OverlayPointerKind.ButtonRelease
             or OverlayPointerKind.WheelUp or OverlayPointerKind.WheelDown or OverlayPointerKind.Axis &&
             IsBlockedByModal(state))
@@ -1051,6 +1061,13 @@ public sealed class NestedUpscaleSession : IDisposable
             return;
         }
 
+        if (!state.SawFirstFrame)
+        {
+            if (TraceInput)
+                Emit($"nested input trace: dropped key {e.KeyCode} before first frame " +
+                     $"'{DescribeWindow(state.Info)}'");
+            return;
+        }
         PrepareInput(state);
         _input.SetTarget(string.Equals(state.Info.Shell, "xwayland", StringComparison.Ordinal));
         _input.HandleKey(e.KeyCode, e.State == OverlayKeyState.Pressed);
@@ -1218,6 +1235,12 @@ public sealed class NestedUpscaleSession : IDisposable
         }
 
         state.LastFrameAt = Environment.TickCount64;
+        if (!state.SawFirstFrame)
+        {
+            state.SawFirstFrame = true;
+            Emit($"nested first frame '{DescribeWindow(state.Info)}' " +
+                 $"{state.SourceWidth}x{state.SourceHeight}");
+        }
         stats.OnCaptured();
         stats.OnPresented();
         stats.OnFrame(new FrameTimings(
@@ -1451,6 +1474,7 @@ public sealed class NestedUpscaleSession : IDisposable
         public NestedWindowInfo Info { get; set; } = null!;
         public bool Minimized { get; set; }
         public bool IsDialog { get; set; }
+        public bool SawFirstFrame { get; set; }
         public long LastFrameAt { get; set; }
         public long LastStallLog { get; set; }
         public string OutputName { get; set; } = string.Empty;
