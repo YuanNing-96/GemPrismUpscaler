@@ -12,7 +12,7 @@ TS=$(date +%Y%m%d-%H%M%S)
 OUT=/tmp/gp-forensics-$TS
 mkdir -p "$OUT"
 
-APP=$(pgrep -x GemPrismUpscaler | head -1)
+APP=$(pgrep -f "GemPrismUpscaler --nested" | head -1)
 GAME=${1:-}
 if [ -z "$GAME" ]; then
     # Match the real game process by its comm; "pgrep -f" would also match the
@@ -38,6 +38,12 @@ DISP=$(cat "$D/display.txt" 2>/dev/null)
         grep -E "GemPrismUpscaler|KhimeDL|bgi\.exe|Endfield|wine|Xwayland" | grep -v grep
     echo "--- app log (tail 400)"
     tail -n 400 "$HOME/.local/share/GemPrismUpscaler/app.log" 2>/dev/null
+    if [ -f /tmp/gp-app.log ]; then
+        echo "--- GEMPRISM_LOG (/tmp/gp-app.log, tail 400)"
+        tail -n 400 /tmp/gp-app.log
+    fi
+    echo "--- proton/dxvk logs"
+    ls -l /tmp/gp-proton /tmp/gp-dxvk 2>/dev/null
 } > "$OUT/meta.txt" 2>&1
 
 if [ -n "$SWAYSOCK" ] && [ -S "$SWAYSOCK" ]; then
@@ -71,6 +77,14 @@ if [ -n "$GAME" ]; then
         -ex "set pagination off" \
         -ex "thread apply all bt 8" > "$OUT/game-threads.txt" 2>&1
 fi
+
+# GEMPRISM_LOG and Wine/DXVK logs are often redirected to /tmp by the launch
+# command; copy them when present.
+for f in "$HOME/.local/share/GemPrismUpscaler/app.log" /tmp/gp-app.log; do
+    [ -f "$f" ] && cp "$f" "$OUT/" 2>/dev/null
+done
+[ -d /tmp/gp-proton ] && cp -a /tmp/gp-proton "$OUT/proton" 2>/dev/null
+[ -d /tmp/gp-dxvk ] && cp -a /tmp/gp-dxvk "$OUT/dxvk" 2>/dev/null
 
 pactl list sink-inputs > "$OUT/audio.txt" 2>&1
 ps -eLo pid,tid,stat,pcpu,wchan:24,comm > "$OUT/threads.txt" 2>&1
