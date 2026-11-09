@@ -66,7 +66,6 @@ public sealed class ToplevelCapture : INestedFrameSource
     private byte[] _pixels = Array.Empty<byte>();
     private bool _constraintsDone;
     private bool _sizeDirty;
-    private bool _sourceIsRgb = true;
     private long _sequence;
     private bool _disposed;
 
@@ -74,7 +73,10 @@ public sealed class ToplevelCapture : INestedFrameSource
     public int Height { get; private set; }
     public int Stride { get; private set; }
     public long Sequence => Interlocked.Read(ref _sequence);
-    public bool SourceIsRgb => _sourceIsRgb;
+    // ConvertToBgra always writes B,G,R,A order, so the blitter must sample
+    // B8G8R8A8 (not R8G8B8A8). The wlr-screencopy path used the opposite
+    // convention because its raw reads arrive as R,G,B.
+    public bool SourceIsRgb => false;
     public string AppId { get; }
     public string Title { get; }
     public bool HasToplevel => _handle is not null && _session is not null;
