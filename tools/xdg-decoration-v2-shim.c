@@ -20,6 +20,7 @@
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wayland-server-core.h>
 
@@ -29,6 +30,14 @@ typedef struct wl_global *(*wl_global_create_fn)(struct wl_display *display,
                                                  wl_global_bind_func_t bind);
 
 static wl_global_create_fn real_wl_global_create;
+static int hide_syncobj;
+
+__attribute__((constructor)) static void init_hide_syncobj(void)
+{
+    const char *value = getenv("GEMPRISM_HIDE_SYNCOBJ");
+    hide_syncobj = value && value[0] && value[0] != '0' &&
+                   strcmp(value, "off") != 0 && strcmp(value, "false") != 0;
+}
 
 struct wl_global *wl_global_create(struct wl_display *display,
                                    const struct wl_interface *interface,
@@ -43,6 +52,12 @@ struct wl_global *wl_global_create(struct wl_display *display,
     if (interface && interface->name && version < 2 &&
         strcmp(interface->name, "zxdg_decoration_manager_v1") == 0)
         version = 2;
+
+    /* Diagnostic switch: hide explicit-sync so clients fall back to implicit
+     * fences. Used to isolate compositor-side syncobj handling. */
+    if (hide_syncobj && interface && interface->name &&
+        strcmp(interface->name, "wp_linux_drm_syncobj_manager_v1") == 0)
+        return NULL;
 
     return real_wl_global_create(display, interface, version, data, bind);
 }
