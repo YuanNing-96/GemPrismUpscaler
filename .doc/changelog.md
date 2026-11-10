@@ -60,7 +60,8 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   没有把“宿主跟着最小化”做下去：Wine 在窗口被客户端 map 之后 ~25ms 会再发一次最小化请求
   （即使完全照搬 KDE 直连实测到的 KWin 顺序：`_NET_WM_STATE_HIDDEN` → map → `WM_STATE=Normal`
   也一样），宿主会在用户点开后被立刻弹回任务栏，比保持显示更糟。测试与对照记录见
-  `.agent/M2b-归档-游戏自我最小化.md`。
+  `.agent/M2b-归档-游戏自我最小化.md`；以后要做“宿主跟随最小化”的 sway/wlroots
+  修复方案与成本评估见 [minimize.md](minimize.md)。
 
 ### 验证
 
