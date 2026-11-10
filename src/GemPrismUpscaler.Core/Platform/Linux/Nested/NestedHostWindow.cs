@@ -4,6 +4,7 @@ using System.Text;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
+using GemPrismUpscaler.Core.Rendering;
 
 namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 
@@ -12,7 +13,7 @@ namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 /// frame in a normal decorated window, or the upscaled frame fullscreen. The
 /// private sway game itself has no KDE window.
 /// </summary>
-public sealed class NestedHostWindow : IDisposable
+public sealed class NestedHostWindow : IHostWindow
 {
     private readonly X11Display _display;
     private readonly MonitorInfo _monitor;
@@ -41,6 +42,9 @@ public sealed class NestedHostWindow : IDisposable
     public bool IsFocused => _focused;
     public bool IsFullscreen => _fullscreen;
     public string MonitorName => _monitor.Name;
+    public bool IsWayland => false;
+    public IntPtr VulkanDisplay => IntPtr.Zero;
+    public IntPtr VulkanSurface => IntPtr.Zero;
 
     public X11Display X11 => _display;
 
@@ -49,12 +53,19 @@ public sealed class NestedHostWindow : IDisposable
     /// Used to mirror a cursor warp the game requested inside the nested
     /// compositor so the visible cursor stays in sync with the game.
     /// </summary>
-    public void WarpPointer(int x, int y)
+    public bool WarpPointer(int x, int y)
     {
+        // Only moves XWayland's shadow pointer; KWin's visible cursor is not
+        // affected, so callers must not treat this as a successful warp. The
+        // native Wayland host window uses wp_pointer_warp_v1 for that.
         X11Native.XWarpPointer(_display.Handle, 0, Window, 0, 0, 0, 0, x, y);
         _display.Sync();
+        return false;
     }
     public IntPtr X11Window => (IntPtr)Window;
+
+    public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb)
+        => new(_display, Window, _width, _height, effect, sourceRgb);
 
     public event Action<OverlayPointerEvent>? Pointer;
     public event Action<OverlayKeyEvent>? Key;

@@ -25,6 +25,7 @@ public sealed unsafe class VulkanBlitter : IDisposable
     private readonly IntPtr _wlDisplay;
     private readonly IntPtr _wlSurface;
     private readonly bool _isWayland;
+    private readonly PresentModeKHR? _preferredPresentMode;
     private readonly int _outputWidth;
     private readonly int _outputHeight;
     private readonly EffectDefinition _effect;
@@ -102,15 +103,24 @@ public sealed unsafe class VulkanBlitter : IDisposable
     {
     }
 
+    /// <param name="preferredPresentMode">
+    /// Wayland host windows pass <c>Mailbox</c>: a native toplevel can be
+    /// occluded or minimized with no frame callback at all, and a FIFO present
+    /// would then block the session thread until the window returns.
+    /// </param>
     public VulkanBlitter(IntPtr wlDisplay, IntPtr wlSurface, int outputWidth, int outputHeight,
-        EffectDefinition? effect = null, bool sourceRgb = false)
-        : this(null, 0, wlDisplay, wlSurface, outputWidth, outputHeight, effect, sourceRgb)
+        EffectDefinition? effect = null, bool sourceRgb = false,
+        PresentModeKHR? preferredPresentMode = null)
+        : this(null, 0, wlDisplay, wlSurface, outputWidth, outputHeight, effect, sourceRgb,
+            preferredPresentMode)
     {
     }
 
     private VulkanBlitter(X11Display? display, ulong window, IntPtr wlDisplay, IntPtr wlSurface,
-        int outputWidth, int outputHeight, EffectDefinition? effect, bool sourceRgb)
+        int outputWidth, int outputHeight, EffectDefinition? effect, bool sourceRgb,
+        PresentModeKHR? preferredPresentMode = null)
     {
+        _preferredPresentMode = preferredPresentMode;
         _display = display;
         _window = window;
         _wlDisplay = wlDisplay;
@@ -383,8 +393,8 @@ public sealed unsafe class VulkanBlitter : IDisposable
         Log.Info($"swapchain format={chosen.Format} colorSpace={chosen.ColorSpace} " +
                  $"exactSdr={exact}");
 
-        PresentModeKHR presentMode = PresentModeKHR.FifoKhr;
-        Log.Info("swapchain present mode=PresentModeFifoKhr");
+        PresentModeKHR presentMode = ChoosePresentMode();
+        Log.Info($"swapchain present mode={presentMode}");
 
         Extent2D extent = caps.CurrentExtent;
         if (_isWayland || extent.Width == uint.MaxValue || extent.Width == 0 || extent.Height == 0)
@@ -450,6 +460,33 @@ public sealed unsafe class VulkanBlitter : IDisposable
             r = _vk.CreateImageView(_device, &iv, null, out _swapchainViews[i]);
             if (r != Result.Success) throw new InvalidOperationException($"vkCreateImageView failed: {r}");
         }
+    }
+
+    /// <summary>
+    /// Pick the requested present mode when the surface supports it, otherwise
+    /// fall back to FIFO (the only mode every Vulkan implementation must
+    /// support).
+    /// </summary>
+    private PresentModeKHR ChoosePresentMode()
+    {
+        uint count = 0;
+        _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &count, null);
+        if (count == 0) return PresentModeKHR.FifoKhr;
+        var modes = stackalloc PresentModeKHR[(int)count];
+        _surfaceExt.GetPhysicalDeviceSurfacePresentModes(_physicalDevice, _surface, &count, modes);
+
+        bool hasPreferred = false;
+        bool hasMailbox = false;
+        for (int i = 0; i < count; i++)
+        {
+            if (_preferredPresentMode is { } preferred && modes[i] == preferred)
+                hasPreferred = true;
+            if (modes[i] == PresentModeKHR.MailboxKhr) hasMailbox = true;
+        }
+
+        if (_preferredPresentMode is { } wanted && hasPreferred) return wanted;
+        if (_isWayland && hasMailbox) return PresentModeKHR.MailboxKhr;
+        return PresentModeKHR.FifoKhr;
     }
 
     /// <summary>

@@ -514,15 +514,24 @@ Engine / WaylandUpscaleSession
 - 输入映射：overlay 局部 → 内容矩形 → 源像素 → 注入；黑边不转发。
 - 原生 Wayland 源无法确定输出时：用户选屏/主屏；M2b 嵌套由 sway 私有输出解决。
 
-### 6.9.6 M2b 嵌套合成器（预览）
+### 6.9.6 M2b 嵌套合成器（已实现）
 
-- 私有 sway（headless 优先 / 隐藏嵌套窗口回退）作为源分辨率虚拟显示器；游戏运行在其中。
-- 主程序内 C# helper 使用 `NWayland.Protocols.Wlr`：`wlr-screencopy`/`wlr-export-dmabuf` 抓帧，`wlr-virtual-pointer` 注入；虚拟键盘待补。
-- 输入 1:1、真实光标不动、raw input/指针锁定可用；不改源窗口状态（不做 promote）。
-- 窗口识别：Profile / token + PID / sway IPC / transient+window type；歧义手动选择；对话框不改输出尺寸。
-- 任意分辨率/宽高比：嵌套输出 = 主窗口客户区尺寸；4:3 由现有 fit/stretch 处理。
-- 启动器/Lutris：`--nested`、`--nested-session` + wrapper；Lutris per-game env/wrapper；Steam/Heroic best-effort。
-- 详细见 [m2-plan.md](m2-plan.md) §6。
+- 私有 sway（headless，单一输出 `HEADLESS-1`）作为虚拟显示器；游戏运行在其中。
+- 虚拟桌面在会话开始时按用户所选物理显示器**快照分辨率与刷新率**；之后的热插拔不改变
+  运行中的桌面（避免刷新率变化导致 wlroots 选错 frame-pacing 输出而黑屏）。
+- 抓帧：`ext-image-copy-capture` 按 toplevel 抓取（`GEMPRISM_TOPLEVEL_CAPTURE=1`），
+  不依赖输出尺寸；旧的“每窗口一个虚拟输出”池仍保留为多窗口模式。
+- 宿主窗口：每个游戏 toplevel 一个 KDE 窗口。默认是**原生 Wayland `xdg_toplevel`**
+  （服务端装饰、分数缩放、`wp_pointer_warp_v1`）；`GEMPRISM_HOST_X11=1` 回退 X11/EWMH。
+- 呈现：Vulkan swapchain 直接建在宿主 `wl_surface` 上；缓冲像素 = 显示器物理像素，
+  `wp_viewport` 映射回逻辑尺寸，因此超分画面在 1.5× 屏上仍是 1:1。
+- 输入：内部 XWayland 走 XTest；原生 Wayland 客户端走 `wlr-virtual-pointer` +
+  `zwp_virtual_keyboard_manager_v1` helper（`tools/gemprism-vkeyboard`）。
+- 光标：游戏的 `zwp_locked_pointer_v1` 提示经 sway 补丁 → IPC → 应用 →
+  `wp_pointer_warp_v1`，KWin 可见光标跟着跳；详见 [pointer-warp.md](pointer-warp.md)。
+- 窗口识别：Profile / token + PID / sway IPC / transient+window type；对话框单独宿主窗口并
+  `xdg_toplevel.set_parent`。窗口化宿主尺寸取游戏窗口实际矩形，退出超分后恢复。
+- 启动器/Lutris：`--nested`、`--nested-session` + `tools/gemprism-nested-run`。
 
 ### 6.9.7 M2c 色彩/性能（预览）
 

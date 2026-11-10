@@ -1,5 +1,57 @@
 # 更新记录
 
+## v0.5.0（2026-11-10）· M2b：单输出嵌套、toplevel 抓取与原生 Wayland 宿主窗口
+
+M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一个虚拟桌面 + 按 toplevel 抓取”，
+并把 KDE 侧窗口换成原生 Wayland 窗口。本节随 M2b 收尾继续更新。
+
+### 新增
+
+- **单输出 + toplevel 抓取**：私有 sway 只保留一个 headless 输出，抓帧改用
+  `ext-image-copy-capture` 按 toplevel 取客户端缓冲（`GEMPRISM_TOPLEVEL_CAPTURE=1` 开发开关）；
+  窗口移动/缩放不再需要热插拔虚拟输出。旧的多输出池保留为多窗口模式。
+- **原生 Wayland 宿主窗口**：`IHostWindow` 抽象 + `WaylandHostWindow`（`xdg_toplevel`、
+  `zxdg_decoration_manager_v1`、`wp_viewporter` + `wp_fractional_scale_manager_v1`、`wp_pointer_warp_v1`）。
+  `GEMPRISM_HOST_X11=1` 可回到 X11/EWMH 宿主窗口；Wayland 不可用时自动回退。
+- **光标跳转**：游戏在嵌套桌面里请求移动光标时，应用把位置换算成宿主窗口坐标并调用
+  `wp_pointer_warp_v1`，KWin 的可见光标跟着跳。位置来源是 sway 补丁暴露的
+  `cursor_hint_*` IPC（`tools/patches/sway-1.12-cursor-hint-ipc.patch` +
+  `tools/build-nested-sway.sh`）。详见 [pointer-warp.md](pointer-warp.md)。
+- **宿主尺寸模型**：宿主窗口按 `logical × output scale` 分配缓冲，`wp_viewport` 映射回逻辑尺寸，
+  超分输出正好等于显示器物理分辨率（1.5× 屏上全屏 = 3840×2160，不是 5120×2880）。
+  相关换算有单测（`HostSurfaceGeometryTests`）。
+- **窗口化宿主尺寸**：toplevel 模式下宿主尺寸取游戏窗口实际矩形（不再用 Wine 报告的
+  设计分辨率），退出超分后回到 1286×752 而不是 806×632。
+
+### 修复
+
+- **Wine 游戏窗口黑屏**：虚拟输出刷新率为 0 时，wlroots 把 `CAPTURE-N` 当成 frame-pacing
+  输出，而它只有 commit、没有 present 反馈，`vkWaitForPresentKHR` 永久阻塞。现在会话开始时
+  从 XRandR 快照显示器刷新率（取不到时退 60Hz）并写入 sway 输出模式。
+- **点击位置错误**（Wayland 宿主引入）：`wl_pointer.button` 事件没有位置，修复前被当成
+  (0,0) 映射到窗口左上角，表现为“有悬停、点击无效”。现在按钮/滚轮事件带上最后一次
+  motion 的缓冲像素坐标。
+- **超分切换后窗口尺寸错误**：全屏 configure 的逻辑尺寸 × scale 现在直接得到物理分辨率，
+  不再出现 4K 显示器上退出超分后窗口变成 4K 大小、带黑边。
+
+### 验证
+
+- `dotnet build`：0 warning / 0 error；`dotnet test`：145/145 通过（新增 20 个坐标换算测试）。
+- 独立探针（未提交）：warp 请求 `buffer=450,300` 后下一次 motion 正好回报 `450,300`；
+  截图测得窗口内容在屏幕上为 1:1 物理像素。
+- zenity 冒烟：窗口 344×270 → 全屏 `logical=2560x1440 buffer=3840x2160` → 还原 344×270。
+- 实机游戏（秽翼的尤斯蒂娅，Proton/Wine Wayland）：界面显示、悬停、点击、光标跳转、
+  超分进出全部正常；一次退出确认框记录 25 次 warp。
+- `GEMPRISM_HOST_X11=1` 冒烟：旧 X11 宿主窗口仍可创建并呈现。
+
+### 已知限制
+
+- **Wayland 窗口位置**：xdg-shell 不提供定位请求，窗口化位置由 KWin 决定；只有全屏能指定输出。
+- **最小化不可逆**：`xdg_toplevel.set_minimized()` 没有取消请求，游戏自我最小化后无法从客户端
+  恢复宿主，需要用户从任务栏恢复（反方向正常）。
+- **无焦点窃取**：Wayland 下 `Focus()`/`Activate()`/`Raise()` 为空操作。
+- **显示器热插拔**：运行中的虚拟桌面不会跟随分辨率/刷新率变化（v1.0 规则）；新会话才重新快照。
+
 ## v0.4.0（2026-11-07）· M2a：Wayland layer-shell、XWayland 混合与 portal 捕获
 
 M2a 把呈现从 X11 override-redirect 扩展到 Wayland layer-shell，并加入原生 Wayland portal 捕获。按约定，M2a 只做主要路径冒烟；完整回归/边界兼容性留到 v1.0。

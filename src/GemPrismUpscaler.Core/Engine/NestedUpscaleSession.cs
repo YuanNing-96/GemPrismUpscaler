@@ -50,6 +50,12 @@ public sealed class NestedUpscaleSession : IDisposable
     private Exception? _initError;
 
     private readonly bool _toplevelMode;
+    /// <summary>
+    /// Native xdg_toplevel host windows instead of X11/XWayland windows. That
+    /// is what enables wp_pointer_warp_v1, and it also drops the XWayland
+    /// shadow cursor. GEMPRISM_HOST_X11=1 keeps the old backend for A/B.
+    /// </summary>
+    private bool _waylandHost;
     private SwayIpc? _ipc;
     private SwayOutputPool? _pool;
     private NestedWindowTracker? _tracker;
@@ -79,6 +85,8 @@ public sealed class NestedUpscaleSession : IDisposable
         _waitForCommand = waitForCommand;
         _preferredMain = preferredMain;
         _toplevelMode = Environment.GetEnvironmentVariable("GEMPRISM_TOPLEVEL_CAPTURE") is "1" or "true";
+        _waylandHost = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")) &&
+                       Environment.GetEnvironmentVariable("GEMPRISM_HOST_X11") is not ("1" or "true");
         _thread = new Thread(Run) { IsBackground = true, Name = "nested-upscale" };
     }
 
@@ -185,7 +193,8 @@ public sealed class NestedUpscaleSession : IDisposable
                  $"monitor='{_monitorName ?? "auto"}' " +
                  $"output={_outputWidth}x{_outputHeight}@{_session.RefreshMilliHz / 1000.0:0.###}Hz " +
                  $"base='{_pool?.BaseOutput ?? SwayConfig.DefaultOutput}' " +
-                 $"mode={(_mode == ScalingMode.Fit ? "fit" : "stretch")} effect='{_effect.Id}'");
+                 $"mode={(_mode == ScalingMode.Fit ? "fit" : "stretch")} effect='{_effect.Id}' " +
+                 $"host={(_waylandHost ? "wayland" : "x11")}");
     }
 
     /// <summary>
@@ -621,13 +630,11 @@ public sealed class NestedUpscaleSession : IDisposable
             string title = WindowTitle(window);
             bool dialog = window.LooksLikeDialog || window.TransientFor is not null;
             bool focusNew = dialog || _states.Count == 0;
-            ulong parentWindow = dialog ? ParentHostWindow(window.TransientFor) : 0;
+            var parentState = dialog ? FindDialogParent(window) : null;
             state.Info = window;
             state.IsDialog = dialog;
-            state.Host = new NestedHostWindow(_monitorName, title,
-                state.SourceWidth, state.SourceHeight,
-                startFullscreen: state.LastGameFullscreen,
-                transientFor: parentWindow, dialog: dialog);
+            state.Host = CreateHostWindow(title, state.SourceWidth, state.SourceHeight,
+                state.LastGameFullscreen, parentState, dialog);
             state.LastHostWidth = state.Host.Width;
             state.LastHostHeight = state.Host.Height;
             state.LastTitle = title;
@@ -651,9 +658,7 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Host.Exposed += () => state.ForceRender = true;
             state.Host.Restored += () => RestoreMinimizedWindow(state);
 
-            state.Blitter = new VulkanBlitter(state.Host.X11, state.Host.Window,
-                state.Host.Width, state.Host.Height, OriginalEffect,
-                sourceRgb: capture.SourceIsRgb);
+            state.Blitter = state.Host.CreateBlitter(OriginalEffect, capture.SourceIsRgb);
             state.Diff.Reset();
             state.ForceRender = true;
 
@@ -953,21 +958,53 @@ public sealed class NestedUpscaleSession : IDisposable
         }
     }
 
-    private ulong ParentHostWindow(int? transientFor)
+    /// <summary>
+    /// Pick the KDE host that should own a dialog. sway reports the game's
+    /// X11 parent id in window_properties.transient_for, so match it against
+    /// the *inner* game windows (same X server), not the KDE-facing hosts.
+    /// </summary>
+    private WindowState? FindDialogParent(NestedWindowInfo dialog)
     {
-        // sway stores the X11 parent window id in window_properties.transient_for,
-        // not the sway con_id. Match it against the host's X11 window id.
-        if (transientFor is int xid)
+        if (dialog.TransientFor is int xid and not 0)
         {
-            uint parentXid = (uint)xid;
             var match = _states.Values.FirstOrDefault(s =>
-                s.Host is not null && (uint)s.Host.Window == parentXid);
-            if (match?.Host is not null) return match.Host.Window;
+                s.Id != dialog.Id && s.Info.X11Window != 0 &&
+                s.Info.X11Window == (ulong)xid && s.Host is not null);
+            if (match is not null) return match;
         }
 
-        if (_states.TryGetValue(_focusedId, out var focused) && focused.Host is not null)
-            return focused.Host.Window;
-        return _states.Values.FirstOrDefault(s => s.Host is not null)?.Host?.Window ?? 0;
+        if (_states.TryGetValue(_focusedId, out var focused) &&
+            focused.Id != dialog.Id && focused.Host is not null)
+            return focused;
+        return _states.Values.FirstOrDefault(s => s.Host is not null && s.Id != dialog.Id);
+    }
+
+    /// <summary>
+    /// Create the KDE-facing window for one game window. The X11 backend needs
+    /// the parent X11 window id and the dialog hint *before* the window is
+    /// mapped, while the Wayland backend sets xdg_toplevel.set_parent.
+    /// </summary>
+    private IHostWindow CreateHostWindow(string title, int width, int height, bool fullscreen,
+        WindowState? parent, bool dialog)
+    {
+        if (_waylandHost)
+        {
+            try
+            {
+                return new WaylandHostWindow(_monitorName, title, width, height, fullscreen,
+                    parent?.Host as WaylandHostWindow, dialog);
+            }
+            catch (Exception ex)
+            {
+                Emit($"nested wayland host unavailable ({ex.GetType().Name}: {ex.Message}); " +
+                     "falling back to the X11 host window for this session");
+                _waylandHost = false;
+            }
+        }
+
+        ulong transientFor = parent?.Host is NestedHostWindow x11Parent ? x11Parent.Window : 0;
+        return new NestedHostWindow(_monitorName, title, width, height,
+            startFullscreen: fullscreen, transientFor: transientFor, dialog: dialog);
     }
 
     private void ExitAllUpscale()
@@ -1187,15 +1224,16 @@ public sealed class NestedUpscaleSession : IDisposable
     private bool IsBlockedByModal(WindowState state)
     {
         if (state.Host is null) return false;
-        ulong parentXid = state.Host.Window;
+        // A modal dialog is transient for the game window it blocks. Both ids
+        // live in the nested compositor's XWayland, so compare those instead
+        // of the KDE-facing host ids (different X server, never equal).
+        ulong parentXid = state.Info.X11Window;
+        if (parentXid == 0) return false;
         foreach (var other in _states.Values)
         {
             if (other.Id == state.Id || other.Ignored || other.Host is null) continue;
-            if (other.Info.TransientFor is int transient &&
-                (uint)transient == (uint)parentXid)
-            {
+            if (other.Info.TransientFor is int transient && (ulong)transient == parentXid)
                 return true;
-            }
         }
         return false;
     }
@@ -1419,9 +1457,8 @@ public sealed class NestedUpscaleSession : IDisposable
         if (state.Host is null) return;
         try { state.Blitter?.Dispose(); }
         catch (Exception ex) { Log.Warn($"nested blitter dispose: {ex.Message}"); }
-        state.Blitter = new VulkanBlitter(state.Host.X11, state.Host.Window,
-            state.Host.Width, state.Host.Height, effect,
-            sourceRgb: state.Capture?.SourceIsRgb ?? true);
+        state.Blitter = state.Host.CreateBlitter(effect,
+            state.Capture?.SourceIsRgb ?? true);
     }
 
     private void PumpHost(WindowState state, int count)
@@ -1601,7 +1638,7 @@ public sealed class NestedUpscaleSession : IDisposable
         public int SourceHeight { get; set; }
         public int WindowedWidth { get; set; }
         public int WindowedHeight { get; set; }
-        public NestedHostWindow? Host { get; set; }
+        public IHostWindow? Host { get; set; }
         public VulkanBlitter? Blitter { get; set; }
         public bool Upscale { get; set; }
         public bool Switching { get; set; }
