@@ -33,7 +33,6 @@ public sealed class NestedInput : IDisposable
     private bool _xwayland = true;
     private bool _warnedNoPointer;
     private bool _havePointerPosition;
-    private long _lastAbsoluteAt;
     private int _lastPointerX;
     private int _lastPointerY;
     private bool _disposed;
@@ -238,15 +237,12 @@ public sealed class NestedInput : IDisposable
         }
 
         uint time = (uint)Environment.TickCount64;
-        // A game can warp the cursor without telling us (Wine does this when a
-        // modal dialog opens, by locking the pointer with a cursor position
-        // hint). The compositor applies the warp, but our relative stream keeps
-        // the old reference and every later motion preserves that offset, so
-        // clicks land where the dialog used to be. Re-anchor with an absolute
-        // position on clicks and periodically while moving; a persistent lock
-        // ignores absolute motion, so this cannot break locked games.
-        bool refreshAbsolute = Environment.TickCount64 - _lastAbsoluteAt >= 1000;
-        if (forceAbsolute || !_havePointerPosition || refreshAbsolute)
+        // The game can move the compositor's pointer without telling us (Wine
+        // does that when a modal dialog opens). The cursor-sync loop rebases
+        // the relative reference through SetPointerReference as soon as sway
+        // reports the warp, so the periodic absolute re-anchor this used to do
+        // is gone: it fought the reference instead of following it.
+        if (forceAbsolute || !_havePointerPosition)
         {
             if (TraceInput)
                 Log.Info($"nested input trace: ABSOLUTE pos={x},{y} " +
@@ -259,7 +255,6 @@ public sealed class NestedInput : IDisposable
             _virtualPointer.MotionAbsolute(time, (uint)Math.Max(0, x), (uint)Math.Max(0, y),
                 (uint)Math.Max(_outputWidth, _layoutWidth),
                 (uint)Math.Max(_outputHeight, _layoutHeight));
-            _lastAbsoluteAt = Environment.TickCount64;
         }
         else
         {

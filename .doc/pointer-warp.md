@@ -111,8 +111,10 @@ Wayland 宿主窗口有两个坐标空间，混淆会按 output scale 偏移所�
 - 补丁：`tools/patches/sway-1.12-cursor-hint-ipc.patch`
 - 构建：`tools/build-nested-sway.sh`（sway 1.12 + 补丁 → `runtime/sway/sway`）
 - 接口：`swaymsg -t get_seats` 增加 `cursor_hint_seq` / `cursor_hint_x` / `cursor_hint_y`
-- 未打补丁时（系统 sway）没有这些字段，应用静默退回“点击/周期性绝对定位”的重锚方案，
-  悬停需要“晃一下”，但点击仍然准确。
+- 未打补丁时（系统 sway）没有这些字段：应用不再有任何“自动重锚”兜底，悬停需要
+  “晃一下”，但点击前仍会补一次绝对定位，所以点击位置是准的。
+- 早期为绕开“光标不跳”加过的每秒强制绝对定位已经移除（见 §7）：有了真实的
+  `wp_pointer_warp_v1` 之后，它只会和 sway 回报的 warp 参考点互相拉扯。
 
 ## 6. 已知限制
 
@@ -130,14 +132,23 @@ Wayland 宿主窗口有两个坐标空间，混淆会按 output scale 偏移所�
 - **全屏尺寸**：取 configure 的逻辑尺寸 × scale，正好等于显示器物理分辨率；
   超分后的画面因此是 1:1 像素，不再被合成器二次放大。
 
-## 7. 参考
+## 7. 已移除的临时处理
+
+`3c90e83` 曾在 `NestedInput.SendPointerPosition` 里每秒强制发一次 `MotionAbsolute`，用来让
+相对位移参考点“跟上”游戏自己挪走的光标。当时可见光标还不能跳，这只能在 1 秒内把嵌套指针
+拉回宿主位置。现在 `wp_pointer_warp_v1` 生效、sway 一报 `cursor_hint_*` 就重设参考点，
+这个定时器既多余又会和参考点打架，已经删掉；归档说明见
+`.agent/M2b-归档-指针周期绝对刷新.md`。点击前的绝对定位（`forceAbsolute`）保留：
+XWayland 游戏用 `XWarpPointer` 移动内部指针时没有 hint，点击时补一次绝对定位仍然必要。
+
+## 8. 参考
 
 - 协议：`/usr/share/wayland-protocols/staging/pointer-warp/pointer-warp-v1.xml`
 - KWin 全局：`wp_pointer_warp_v1`（2026-11 的 6.8.2 已验证存在）
 - 分数缩放：`wp_fractional_scale_manager_v1` + `wp_viewporter`
 - libei / liboeffis：`/usr/include/libei-1.0/`（作为替代方案已排除，见下）
 
-## 8. 已排除的替代方案（留档）
+## 9. 已排除的替代方案（留档）
 
 | 方案 | 结果 |
 |---|---|
