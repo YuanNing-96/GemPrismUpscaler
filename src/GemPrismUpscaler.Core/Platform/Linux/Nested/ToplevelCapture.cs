@@ -178,6 +178,7 @@ public sealed class ToplevelCapture : INestedFrameSource
         _bufferSize = _sourceStride * Height;
         Stride = Width * 4;
         _pixels = new byte[Stride * Height];
+        _raw = new byte[_bufferSize];
         _lastFrame = default;
 
         _fd = memfd_create("gemprism-toplevel-capture", 0);

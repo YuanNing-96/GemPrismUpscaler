@@ -184,7 +184,7 @@ public sealed class NestedCapture : INestedFrameSource
                 // compositor's read format.
                 Stride = Width * 4;
                 _pixels = new byte[Stride * Height];
-        _lastFrame = default;
+                _lastFrame = default;
                 Log.Info($"nested capture: resized {Width}x{Height} stride={Stride}");
             }
 
