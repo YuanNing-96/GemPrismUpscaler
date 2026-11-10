@@ -533,12 +533,15 @@ Engine / WaylandUpscaleSession
   `xdg_toplevel.set_parent`。窗口化宿主尺寸取游戏窗口实际矩形，退出超分后恢复。- 最小化：X11 游戏按 ICCCM 向嵌套 XWayland 的 root 发 `WM_CHANGE_STATE(IconicState)`。
   sway 没有最小化概念、忽略该请求（`WM_STATE` 一直是 Normal，surface 也保持 mapped），
   KWin 直连时则会照办。因此应用自己监听这条 ClientMessage（`SubstructureNotifyMask`，
-  不能选 `SubstructureRedirectMask`，否则会把请求从 sway 手里抢走），收到后
-  `xdg_toplevel.set_minimized` 宿主窗口。xdg-shell 无法撤销最小化：用户从任务栏恢复宿主时，
-  KWin 重新激活窗口（`activated` configure）才触发 `Restored`，应用再按 WM 的方式
-  unmap+map 游戏窗口把它唤醒；unmap/map 会让 sway 销毁并重建 toplevel，所以必须为新
-  toplevel 重建 capture（`RekeyWindow` → `RecreateCapture`），否则宿主停在旧帧。Wayland
-  游戏（Wine 把窗口缩成 160×31 那条）没有对应信号，仍不处理。
+  不能选 `SubstructureRedirectMask`，否则会把请求从 sway 手里抢走），收到后按窗口管理器的
+  顺序把游戏窗口 iconify（`_NET_WM_STATE_HIDDEN` → unmap → `WM_STATE=Iconic`），再
+  `xdg_toplevel.set_minimized` 宿主窗口。顺序必须和 KWin 一致（在 KDE 直连上用 X11 事件
+  监听实测）：先写 WM_STATE 再 unmap/map 的话，Wine 会在窗口恢复 40ms 后又发一次最小化请求。
+  xdg-shell 无法撤销最小化：用户从任务栏恢复宿主时，KWin 重新激活窗口（`activated`
+  configure）才触发 `Restored`，应用再按 KWin 的顺序 map 游戏窗口（去 hidden → map →
+  `WM_STATE=Normal`）。unmap/map 会让 sway 销毁并重建 toplevel，所以必须为新 toplevel 重建
+  capture（`RekeyWindow` → `RecreateCapture`）并重新聚焦；否则宿主停在旧帧、游戏不重绘。
+  Wayland 游戏（Wine 把窗口缩成 160×31 那条）没有对应信号，仍不处理。
 - 启动器/Lutris：`--nested`、`--nested-session` + `tools/gemprism-nested-run`。
 
 ### 6.9.7 M2c 色彩/性能（预览）

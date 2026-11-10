@@ -95,9 +95,14 @@ internal sealed class NestedWindowProbe : IDisposable
         if (xid == 0 || _wmStateAtom == 0) return false;
         try
         {
-            WriteState(xid, IconicState);
+            // KWin's order, observed on a direct (non-nested) run: mark the
+            // window hidden, unmap it, and set WM_STATE afterwards. Wine reads
+            // WM_STATE while it processes the unmap, so the reverse order is
+            // not equivalent.
+            SetHiddenState(xid, true);
             X11Native.XUnmapWindow(_display.Handle, xid);
             _display.Sync();
+            WriteState(xid, IconicState);
             return true;
         }
         catch (Exception ex)
@@ -117,9 +122,12 @@ internal sealed class NestedWindowProbe : IDisposable
         if (xid == 0 || _wmStateAtom == 0) return false;
         try
         {
-            WriteState(xid, NormalState);
+            // Same order as KWin on restore: drop the hidden state, map, then
+            // set WM_STATE=Normal.
+            SetHiddenState(xid, false);
             X11Native.XMapRaised(_display.Handle, xid);
             _display.Sync();
+            WriteState(xid, NormalState);
             return true;
         }
         catch (Exception ex)
@@ -190,6 +198,42 @@ internal sealed class NestedWindowProbe : IDisposable
         {
             X11Native.XFree(prop);
         }
+    }
+
+    /// <summary>
+    /// Adds or removes <c>_NET_WM_STATE_HIDDEN</c>, which is how an EWMH window
+    /// manager tells the client that a window was iconified rather than hidden
+    /// by itself. KWin leaves the window with only that atom while minimized.
+    /// </summary>
+    private void SetHiddenState(ulong xid, bool hidden)
+    {
+        ulong hiddenAtom = _display.AtomNetWmStateHidden;
+        ulong netWmState = _display.AtomNetWmState;
+        if (hiddenAtom == 0 || netWmState == 0) return;
+        const ulong XaAtom = 4;
+        var atoms = new List<ulong>();
+        int status = X11Native.XGetWindowProperty(_display.Handle, xid, netWmState,
+            0, 32, 0, XaAtom, out _, out int format, out ulong count, out _, out IntPtr prop);
+        if (status == 0 && prop != IntPtr.Zero)
+        {
+            try
+            {
+                if (format == 32)
+                {
+                    for (ulong i = 0; i < count; i++)
+                        atoms.Add((ulong)(uint)Marshal.ReadInt32(prop, (int)i * 4));
+                }
+            }
+            finally
+            {
+                X11Native.XFree(prop);
+            }
+        }
+        atoms.RemoveAll(a => a == hiddenAtom);
+        if (hidden) atoms.Add(hiddenAtom);
+        X11Native.XChangeProperty(_display.Handle, xid, netWmState, XaAtom, 32,
+            X11Native.PropModeReplace, atoms.ToArray(), atoms.Count);
+        _display.Sync();
     }
 
     private void WriteState(ulong xid, int state)

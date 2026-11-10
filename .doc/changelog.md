@@ -55,9 +55,11 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - **X11 游戏的最小化镜像到宿主窗口**：Wine 按 ICCCM 发 `WM_CHANGE_STATE(IconicState)` 请求
   最小化，KWin 直连时照办，嵌套的 sway 却没有最小化概念、把请求忽略掉：游戏窗口留在虚拟桌面上，
   客户端停止绘制，宿主还停在它隐藏前画出的那一帧全黑画面上，看起来就是按 Esc 后“黑闪一下”。
-  现在探针在嵌套 XWayland 的 root 上监听这个 ClientMessage，收到就 `set_minimized` 宿主窗口；
-  从任务栏恢复宿主时，按窗口管理器的方式 unmap+map 游戏窗口把它唤醒，并为重建出来的 toplevel
-  新建 capture（旧的随 surface 一起失效，之前会让宿主卡在上一帧）。恢复瞬间被拆掉的 surface
+  现在探针在嵌套 XWayland 的 root 上监听这个 ClientMessage，收到后按窗口管理器的方式把游戏窗口
+  iconify（加 `_NET_WM_STATE_HIDDEN` → unmap → 最后写 `WM_STATE=Iconic`，顺序按 KDE 直连实测的
+  KWin 行为），再 `set_minimized` 宿主窗口。从任务栏恢复宿主时按 KWin 的顺序 反过来
+  （去 hidden → map → 写 `WM_STATE=Normal`），并为重建出来的 toplevel 新建 capture；顺序反了
+  Wine 会在 40ms 后自己再发一次最小化请求（窗口刚恢复就又进任务栏）。恢复瞬间被拆掉的 surface
   会送来一帧全黑，500ms 内丢弃，避免恢复时再闪一次。Wayland 游戏（秽翼 160×31 那条）仍按
   `.agent/M2b-归档-游戏自我最小化.md` 的结论不处理。
 
