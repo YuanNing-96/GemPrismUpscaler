@@ -16,6 +16,7 @@ public sealed class SwayIpc : IDisposable
     private const uint GetTreeType = 4;
     private const uint GetOutputsType = 3;
     private const uint RunCommandType = 0;
+    private const uint GetSeatsType = 101;
 
     private readonly Socket _socket;
     private readonly object _gate = new();
@@ -48,6 +49,8 @@ public sealed class SwayIpc : IDisposable
     public JsonDocument GetTree() => JsonDocument.Parse(Request(GetTreeType));
 
     public JsonDocument GetOutputs() => JsonDocument.Parse(Request(GetOutputsType));
+
+    public JsonDocument GetSeats() => JsonDocument.Parse(Request(GetSeatsType));
 
     public bool RunCommand(string command)
     {

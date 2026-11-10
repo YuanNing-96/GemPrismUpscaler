@@ -1,0 +1,48 @@
+diff --git a/include/sway/input/cursor.h b/include/sway/input/cursor.h
+index 527d035..f9694ec 100644
+--- a/include/sway/input/cursor.h
++++ b/include/sway/input/cursor.h
+@@ -31,6 +31,12 @@ struct sway_cursor {
+ 	struct wlr_surface *image_surface;
+ 	int hotspot_x, hotspot_y;
+ 
++	// Last client-requested cursor warp (pointer constraint hint). Wine uses
++	// this to place the pointer on a dialog button; exposing it over IPC lets
++	// the nested host mirror the warp onto the real desktop cursor.
++	uint64_t hint_warp_seq;
++	double hint_warp_x, hint_warp_y;
++
+ 	struct wlr_pointer_constraint_v1 *active_constraint;
+ 	pixman_region32_t confine; // invalid if active_constraint == NULL
+ 	bool active_confine_requires_warp;
+diff --git a/sway/input/cursor.c b/sway/input/cursor.c
+index fc0f11f..e2539f0 100644
+--- a/sway/input/cursor.c
++++ b/sway/input/cursor.c
+@@ -1288,6 +1288,9 @@ static void warp_to_constraint_cursor_hint(struct sway_cursor *cursor) {
+ 		double ly = sy + con->pending.content_y - view->geometry.y;
+ 
+ 		wlr_cursor_warp(cursor->cursor, NULL, lx, ly);
++		cursor->hint_warp_seq++;
++		cursor->hint_warp_x = lx;
++		cursor->hint_warp_y = ly;
+ 
+ 		// Warp the pointer as well, so that on the next pointer rebase we don't
+ 		// send an unexpected synthetic motion event to clients.
+diff --git a/sway/ipc-json.c b/sway/ipc-json.c
+index 3b69ad3..ffe4f4d 100644
+--- a/sway/ipc-json.c
++++ b/sway/ipc-json.c
+@@ -1227,6 +1227,12 @@ json_object *ipc_json_describe_seat(struct sway_seat *seat) {
+ 		json_object_new_int(seat->wlr_seat->capabilities));
+ 	json_object_object_add(object, "focus",
+ 		json_object_new_int(focus ? focus->id : 0));
++	json_object_object_add(object, "cursor_hint_seq",
++		json_object_new_int64((int64_t)seat->cursor->hint_warp_seq));
++	json_object_object_add(object, "cursor_hint_x",
++		json_object_new_double(seat->cursor->hint_warp_x));
++	json_object_object_add(object, "cursor_hint_y",
++		json_object_new_double(seat->cursor->hint_warp_y));
+ 
+ 	json_object *devices = json_object_new_array();
+ 	struct sway_seat_device *device = NULL;

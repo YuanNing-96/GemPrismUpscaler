@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux;
@@ -55,6 +56,8 @@ public sealed class NestedUpscaleSession : IDisposable
     private NestedInput? _input;
     private NestedWindowProbe? _probe;
     private bool _probeUnavailable;
+    private Thread? _cursorSyncThread;
+    private long _cursorHintSeq;
     private long _lastMinimizePoll;
 
     private int _outputWidth;
@@ -153,6 +156,12 @@ public sealed class NestedUpscaleSession : IDisposable
         _outputHeight = _session.Height;
 
         _ipc = SwayIpc.Connect(_session.SwaySocket);
+        _cursorSyncThread = new Thread(CursorSyncLoop)
+        {
+            IsBackground = true,
+            Name = "nested-cursor-sync"
+        };
+        _cursorSyncThread.Start();
         _tracker = new NestedWindowTracker(
             _ipc, SwayConfig.DefaultOutput, _session.Token, _session.CommandPid,
             _preferredMain, ownsIpc: false);
@@ -177,6 +186,89 @@ public sealed class NestedUpscaleSession : IDisposable
                  $"output={_outputWidth}x{_outputHeight}@{_session.RefreshMilliHz / 1000.0:0.###}Hz " +
                  $"base='{_pool?.BaseOutput ?? SwayConfig.DefaultOutput}' " +
                  $"mode={(_mode == ScalingMode.Fit ? "fit" : "stretch")} effect='{_effect.Id}'");
+    }
+
+    /// <summary>
+    /// The game can move the nested pointer itself (Wine warps it onto the
+    /// default button when a dialog opens). The patched sway reports those
+    /// warps over IPC; mirror them onto the desktop cursor so the cursor the
+    /// user sees stays where the game thinks it is.
+    /// </summary>
+    private void CursorSyncLoop()
+    {
+        while (!_stop)
+        {
+            Thread.Sleep(16);
+            try
+            {
+                MirrorClientCursorWarp();
+            }
+            catch (Exception ex)
+            {
+                if (TraceInput)
+                    Emit($"nested cursor sync failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    private void MirrorClientCursorWarp()
+    {
+        if (_ipc is null || _input is null || !_input.HasPointerReference) return;
+
+        long seq = 0;
+        double x = 0, y = 0;
+        bool supported = false;
+        using (var seats = _ipc.GetSeats())
+        {
+            if (seats.RootElement.ValueKind != JsonValueKind.Array) return;
+            foreach (var seat in seats.RootElement.EnumerateArray())
+            {
+                if (!seat.TryGetProperty("cursor_hint_seq", out var seqElement)) continue;
+                seq = seqElement.GetInt64();
+                x = seat.TryGetProperty("cursor_hint_x", out var xElement) ? xElement.GetDouble() : 0;
+                y = seat.TryGetProperty("cursor_hint_y", out var yElement) ? yElement.GetDouble() : 0;
+                supported = true;
+                break;
+            }
+        }
+        // System sway does not expose the hint; the absolute re-anchor in
+        // NestedInput stays in charge there.
+        if (!supported) return;
+        if (seq == Interlocked.Read(ref _cursorHintSeq)) return;
+        Interlocked.Exchange(ref _cursorHintSeq, seq);
+
+        WindowState? state = null;
+        lock (_stateGate)
+        {
+            if (_states.TryGetValue(_focusedId, out var focused))
+                state = focused;
+        }
+        if (state is null || state.Host is null || !state.Host.IsFocused) return;
+        if (state.Ignored || state.Switching) return;
+
+        int cropX = state.Crop.X, cropY = state.Crop.Y;
+        int sourceWidth = state.SourceWidth, sourceHeight = state.SourceHeight;
+        int hostWidth = state.Host.Width, hostHeight = state.Host.Height;
+        if (sourceWidth <= 0 || sourceHeight <= 0 || hostWidth <= 0 || hostHeight <= 0) return;
+
+        double localX = x - cropX;
+        double localY = y - cropY;
+        if (localX < 0 || localY < 0 || localX >= sourceWidth || localY >= sourceHeight) return;
+
+        var reference = _input.PointerReference;
+        if (Math.Abs(x - reference.X) <= 2 && Math.Abs(y - reference.Y) <= 2) return;
+
+        var dest = LayoutCalculator.ComputeDestRect(sourceWidth, sourceHeight,
+            hostWidth, hostHeight, _mode);
+        int hostX = dest.X + (int)Math.Round(localX * dest.Width / sourceWidth);
+        int hostY = dest.Y + (int)Math.Round(localY * dest.Height / sourceHeight);
+        hostX = Math.Clamp(hostX, 0, hostWidth - 1);
+        hostY = Math.Clamp(hostY, 0, hostHeight - 1);
+
+        if (TraceInput)
+            Emit($"nested cursor hint warp seq={seq} sway={x:0},{y:0} host={hostX},{hostY}");
+        state.Host.WarpPointer(hostX, hostY);
+        _input.SetPointerReference((int)Math.Round(x), (int)Math.Round(y));
     }
 
     private void Loop()
@@ -510,10 +602,19 @@ public sealed class NestedUpscaleSession : IDisposable
             }
             else
             {
-                state.WindowedWidth = InitialWindowedSize(window.RequestedWidth,
-                    crop.Width, outputInfo.Rect.Width);
-                state.WindowedHeight = InitialWindowedSize(window.RequestedHeight,
-                    crop.Height, outputInfo.Rect.Height);
+                // Toplevel capture: the window rect is what the user sees, so
+                // it is the only trustworthy restore size. Wine often reports
+                // a smaller requested size (the game's design resolution)
+                // while sway actually shows a larger window; using the request
+                // would restore the host to the wrong size (black bars).
+                state.WindowedWidth = _toplevelMode
+                    ? crop.Width
+                    : InitialWindowedSize(window.RequestedWidth, crop.Width,
+                        outputInfo.Rect.Width);
+                state.WindowedHeight = _toplevelMode
+                    ? crop.Height
+                    : InitialWindowedSize(window.RequestedHeight, crop.Height,
+                        outputInfo.Rect.Height);
             }
             state.LastGameFullscreen = window.FullscreenMode != 0;
 
@@ -635,7 +736,15 @@ public sealed class NestedUpscaleSession : IDisposable
         if (_toplevelMode)
         {
             // Toplevel capture always delivers the client buffer; only the
-            // window rect (the input target) changes on move/resize.
+            // window rect (the input target) changes on move/resize. Keep the
+            // windowed restore size in sync with the real rect so leaving
+            // upscale returns to the size the user was looking at.
+            if (!state.Upscale && state.Info.FullscreenMode == 0 &&
+                state.Info.Rect.Width > 0 && state.Info.Rect.Height > 0)
+            {
+                state.WindowedWidth = state.Info.Rect.Width;
+                state.WindowedHeight = state.Info.Rect.Height;
+            }
             state.Crop = state.Info.Rect;
             UpdateDest(state);
             return;
@@ -1367,6 +1476,11 @@ public sealed class NestedUpscaleSession : IDisposable
             _states.Clear();
         }
         foreach (var state in states) DisposeStateResources(state);
+
+        _stop = true;
+        if (_cursorSyncThread is { IsAlive: true } && _cursorSyncThread != Thread.CurrentThread)
+            _cursorSyncThread.Join(TimeSpan.FromMilliseconds(200));
+        _cursorSyncThread = null;
 
         try { _input?.Dispose(); } catch (Exception ex) { Emit($"dispose input: {ex.Message}"); }
         try { _probe?.Dispose(); } catch (Exception ex) { Emit($"dispose minimize probe: {ex.Message}"); }

@@ -43,6 +43,17 @@ public sealed class NestedHostWindow : IDisposable
     public string MonitorName => _monitor.Name;
 
     public X11Display X11 => _display;
+
+    /// <summary>
+    /// Move the desktop pointer onto this host window at a window-local point.
+    /// Used to mirror a cursor warp the game requested inside the nested
+    /// compositor so the visible cursor stays in sync with the game.
+    /// </summary>
+    public void WarpPointer(int x, int y)
+    {
+        X11Native.XWarpPointer(_display.Handle, 0, Window, 0, 0, 0, 0, x, y);
+        _display.Sync();
+    }
     public IntPtr X11Window => (IntPtr)Window;
 
     public event Action<OverlayPointerEvent>? Pointer;

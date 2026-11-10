@@ -33,6 +33,7 @@ public sealed class NestedInput : IDisposable
     private bool _xwayland = true;
     private bool _warnedNoPointer;
     private bool _havePointerPosition;
+    private long _lastAbsoluteAt;
     private int _lastPointerX;
     private int _lastPointerY;
     private bool _disposed;
@@ -118,6 +119,22 @@ public sealed class NestedInput : IDisposable
 
     public void SetTarget(bool xwayland) => _xwayland = xwayland;
 
+    public bool HasPointerReference => _havePointerPosition;
+
+    public (int X, int Y) PointerReference => (_lastPointerX, _lastPointerY);
+
+    /// <summary>
+    /// Rebase the relative-motion reference after the compositor moved the
+    /// pointer on its own (client cursor hint). The next host motion then
+    /// produces deltas relative to the new position instead of the stale one.
+    /// </summary>
+    public void SetPointerReference(int x, int y)
+    {
+        _lastPointerX = x;
+        _lastPointerY = y;
+        _havePointerPosition = true;
+    }
+
     public void HandlePointer(OverlayPointerEvent e)
     {
         if (_mapper is null || _disposed) return;
@@ -150,11 +167,11 @@ public sealed class NestedInput : IDisposable
                 SendPointerPosition(outputX, outputY, forceAbsolute: true);
                 break;
             case OverlayPointerKind.ButtonPress:
-                SendPointerPosition(outputX, outputY, forceAbsolute: false);
+                SendPointerPosition(outputX, outputY, forceAbsolute: true);
                 SendButton(e.Button, pressed: true);
                 break;
             case OverlayPointerKind.ButtonRelease:
-                SendPointerPosition(outputX, outputY, forceAbsolute: false);
+                SendPointerPosition(outputX, outputY, forceAbsolute: true);
                 SendButton(e.Button, pressed: false);
                 break;
             case OverlayPointerKind.WheelUp:
@@ -221,7 +238,15 @@ public sealed class NestedInput : IDisposable
         }
 
         uint time = (uint)Environment.TickCount64;
-        if (forceAbsolute || !_havePointerPosition)
+        // A game can warp the cursor without telling us (Wine does this when a
+        // modal dialog opens, by locking the pointer with a cursor position
+        // hint). The compositor applies the warp, but our relative stream keeps
+        // the old reference and every later motion preserves that offset, so
+        // clicks land where the dialog used to be. Re-anchor with an absolute
+        // position on clicks and periodically while moving; a persistent lock
+        // ignores absolute motion, so this cannot break locked games.
+        bool refreshAbsolute = Environment.TickCount64 - _lastAbsoluteAt >= 1000;
+        if (forceAbsolute || !_havePointerPosition || refreshAbsolute)
         {
             if (TraceInput)
                 Log.Info($"nested input trace: ABSOLUTE pos={x},{y} " +
@@ -234,6 +259,7 @@ public sealed class NestedInput : IDisposable
             _virtualPointer.MotionAbsolute(time, (uint)Math.Max(0, x), (uint)Math.Max(0, y),
                 (uint)Math.Max(_outputWidth, _layoutWidth),
                 (uint)Math.Max(_outputHeight, _layoutHeight));
+            _lastAbsoluteAt = Environment.TickCount64;
         }
         else
         {
