@@ -468,6 +468,12 @@ public sealed class NestedUpscaleSession : IDisposable
 
         var removals = _states.Values
             .Where(s => s.MissingSince != 0 &&
+                        // We iconified this window ourselves: its view is gone
+                        // on purpose until the host is restored from the
+                        // taskbar. Only drop it if the client window died.
+                        (!s.Minimized ||
+                         (s.Info.X11Window != 0 && _probe is not null &&
+                          !_probe.IsAlive(s.Info.X11Window))) &&
                         (s.CloseForwarded ||
                          nowTick - s.MissingSince >= MissingWindowGraceMs))
             .ToList();
@@ -531,6 +537,23 @@ public sealed class NestedUpscaleSession : IDisposable
                  $"{ex.GetType().Name}: {ex.Message}");
         }
 
+        // The re-created view is a new seat target: without giving it keyboard
+        // focus again Wine keeps the game paused (no repaint, no hover), because
+        // the focus event that followed the host restore still carried the old
+        // con id.
+        if (_focusedId == state.Id)
+        {
+            try
+            {
+                bool ok = _tracker?.FocusWindow(state.Id) ?? false;
+                Emit($"nested view re-created focus id={state.Id} nested_focus_ok={ok}");
+            }
+            catch (Exception ex)
+            {
+                Emit($"nested view re-created focus failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
         UpdateStateGeometry(state);
         // sway destroys the toplevel and creates a new one for the same X11
         // window (unmap/map, e.g. when the game is deiconified), so the capture
@@ -546,28 +569,17 @@ public sealed class NestedUpscaleSession : IDisposable
         // The new toplevel may not have committed a buffer yet when the view is
         // reported; the session would then be stuck at 1x1. Retry briefly until
         // the capture reports the client's real size.
-        long deadline = Environment.TickCount64 + 1000;
-        ToplevelCapture? capture = null;
+        ToplevelCapture capture;
         try
         {
-            while (true)
-            {
-                capture = new ToplevelCapture(_session.WaylandDisplay!,
-                    state.Info.AppId, state.Info.Name);
-                if (capture.Width > 1 && capture.Height > 1) break;
-                if (Environment.TickCount64 >= deadline) break;
-                capture.Dispose();
-                capture = null;
-                Thread.Sleep(50);
-            }
-            if (capture is null)
-                throw new InvalidOperationException("toplevel has no buffer yet");
+            capture = new ToplevelCapture(_session.WaylandDisplay!,
+                state.Info.AppId, state.Info.Name);
         }
         catch (Exception ex)
         {
-            capture?.Dispose();
             Emit($"nested capture re-create failed for '{DescribeWindow(state.Info)}': " +
                  $"{ex.GetType().Name}: {ex.Message}");
+            state.CaptureRetryAt = Environment.TickCount64 + 200;
             return;
         }
 
@@ -577,6 +589,18 @@ public sealed class NestedUpscaleSession : IDisposable
         state.SourceHeight = capture.Height;
         state.Diff.Reset();
         try { old?.Dispose(); } catch { }
+        if (capture.Width <= 1 || capture.Height <= 1)
+        {
+            // The mapped client has not committed a buffer yet, and the capture
+            // session does not report a later size change, so a session created
+            // now stays 1x1 forever. Ask for a new one in a moment.
+            state.CaptureRetryAt = Environment.TickCount64 + 150;
+            state.SuppressBlackUntil = Environment.TickCount64 + 400;
+            Emit($"nested capture for '{DescribeWindow(state.Info)}' has no buffer " +
+                 "yet; retrying");
+            return;
+        }
+        state.CaptureRetryAt = 0;
         Emit($"nested capture re-created for '{DescribeWindow(state.Info)}' " +
              $"{capture.Width}x{capture.Height}");
     }
@@ -1278,6 +1302,12 @@ public sealed class NestedUpscaleSession : IDisposable
         // restore the state: keep rendering instead.
         if (state.Host is null) return;
         state.Minimized = true;
+        // Act as the window manager: unmap the game window with
+        // WM_STATE=IconicState. Mapping it back later (on host restore) is then
+        // a real transition for Wine; mapping a window it never saw unmapped
+        // makes it re-send the minimize request a moment later.
+        if (state.Info.X11Window != 0 && _probe is not null)
+            _probe.Iconify(state.Info.X11Window);
         state.Host.Iconify();
         Emit($"nested window '{DescribeWindow(state.Info)}' asked to minimize; " +
              "minimizing host (restore it from the taskbar to bring the game back)");
@@ -1292,6 +1322,10 @@ public sealed class NestedUpscaleSession : IDisposable
     {
         if (!state.Minimized) return;
         state.Minimized = false;
+        // The view id is stale while the window is iconic. Restart the
+        // missing-window grace so the re-created view can be rekeyed instead of
+        // the host being closed and re-created (which would move the window).
+        state.MissingSince = 0;
         state.ForceRender = true;
         // Deiconify unmaps and maps the window, which destroys and re-creates
         // its toplevel: the capture of the dying surface returns one black
@@ -1496,6 +1530,20 @@ public sealed class NestedUpscaleSession : IDisposable
     {
         if (state.Ignored || _stop) return;
 
+        // An iconified game window has no sway view to forward to; ask the X11
+        // window itself, the way a window manager would.
+        if (state.Minimized && state.Info.X11Window != 0 && _probe is not null)
+        {
+            bool sent = _probe.RequestClose(state.Info.X11Window);
+            Emit($"nested host close requested for iconified " +
+                 $"'{DescribeWindow(state.Info)}'; sent WM_DELETE_WINDOW (ok={sent})");
+            if (sent)
+            {
+                state.CloseForwarded = true;
+                return;
+            }
+        }
+
         // A dialog is a separate sway view, so a plain close request reaches
         // exactly that view: sway sends xdg_toplevel.close to a Wayland client
         // and WM_DELETE_WINDOW to an XWayland one.
@@ -1542,6 +1590,14 @@ public sealed class NestedUpscaleSession : IDisposable
         // stale/black frame into the (possibly still visible) host.
         if (state.Minimized)
             return false;
+        // A capture created before the client committed its first buffer stays
+        // 1x1; recreate it until the compositor reports the real size.
+        if (_toplevelMode && (state.Capture.Width <= 1 || state.Capture.Height <= 1) &&
+            Environment.TickCount64 >= state.CaptureRetryAt)
+        {
+            RecreateCapture(state);
+            if (state.Capture is null) return false;
+        }
 
         if (state.Host.Width != state.LastHostWidth || state.Host.Height != state.LastHostHeight)
         {
@@ -1988,6 +2044,8 @@ public sealed class NestedUpscaleSession : IDisposable
         /// instead of waiting for the missing-window grace period.
         /// </summary>
         public bool CloseForwarded { get; set; }
+        /// <summary>When to retry a capture that has no client buffer yet.</summary>
+        public long CaptureRetryAt { get; set; }
         /// <summary>Host window that owns this dialog, for re-parenting on rebuild.</summary>
         public long? ParentId { get; set; }
         /// <summary>Size a Wayland host is waiting to be rebuilt at.</summary>
