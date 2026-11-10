@@ -735,46 +735,6 @@ public sealed class NestedUpscaleSession : IDisposable
             // windowed restore size in sync with the real rect so leaving
             // upscale returns to the size the user was looking at.
             bool gameFullscreen = state.Info.FullscreenMode != 0;
-
-            // Wine's Wayland driver "minimizes" a window by shrinking the
-            // toplevel to a tiny strip (observed: 160x31 on 秽翼). xdg-shell has
-            // no minimized state and sway's tree does not change, so the
-            // geometry is the only signal. Normal dialogs stay well above this
-            // (the 197x82 confirmation box is not matched).
-            bool looksMinimized = state.Info.Rect.Width > 0 &&
-                                  state.Info.Rect.Width <= 200 &&
-                                  state.Info.Rect.Height <= 80;
-            if (!state.Upscale && !gameFullscreen && looksMinimized)
-            {
-                if (!state.Minimized)
-                {
-                    state.Minimized = true;
-                    state.Host?.Iconify();
-                    Emit($"nested window '{DescribeWindow(state.Info)}' looks minimized; " +
-                         "mirroring minimize on host");
-                }
-                state.Crop = state.Info.Rect;
-                UpdateDest(state);
-                return;
-            }
-            if (state.Minimized && !looksMinimized)
-            {
-                state.Minimized = false;
-                // A Wayland host was iconified with set_minimized, which cannot
-                // be undone from the client: map a fresh toplevel instead.
-                if (state.Host is { CanResize: false } waylandHost)
-                {
-                    RebuildHost(state, state.WindowedWidth, state.WindowedHeight);
-                }
-                else
-                {
-                    state.Host?.RestoreFromIconify();
-                }
-                state.ForceRender = true;
-                Emit($"nested window '{DescribeWindow(state.Info)}' restored; " +
-                     "resuming host");
-            }
-
             if (!state.Upscale && !gameFullscreen &&
                 state.Info.Rect.Width > 0 && state.Info.Rect.Height > 0)
             {
@@ -1244,16 +1204,7 @@ public sealed class NestedUpscaleSession : IDisposable
             else
             {
                 state.Minimized = false;
-                if (state.Host is { CanResize: false })
-                {
-                    // set_minimized cannot be undone by a Wayland client; map a
-                    // fresh toplevel at the current game size instead.
-                    RebuildHost(state, state.WindowedWidth, state.WindowedHeight);
-                }
-                else
-                {
-                    state.Host?.RestoreFromIconify();
-                }
+                state.Host?.RestoreFromIconify();
                 state.ForceRender = true;
                 Emit($"nested window '{DescribeWindow(state.Info)}' restored; resuming host");
             }
