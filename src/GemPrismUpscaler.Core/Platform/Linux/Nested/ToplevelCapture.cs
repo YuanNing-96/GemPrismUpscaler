@@ -144,10 +144,8 @@ public sealed class ToplevelCapture : INestedFrameSource
         if (!_constraintsDone)
             throw new InvalidOperationException("capture session did not send buffer constraints");
         EnsureBuffer();
-        string line = $"toplevel capture: app_id='{AppId}' title='{Title}' {Width}x{Height} " +
-                      $"format={_format} bpp={_bpp}";
-        if (Width <= 1 || Height <= 1) Log.Debug(line);
-        else Log.Info(line);
+        Log.Info($"toplevel capture: app_id='{AppId}' title='{Title}' {Width}x{Height} " +
+                 $"format={_format} bpp={_bpp}");
     }
 
     private bool Matches(HandleListener listener)

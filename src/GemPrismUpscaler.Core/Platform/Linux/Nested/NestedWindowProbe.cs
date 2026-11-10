@@ -84,33 +84,10 @@ internal sealed class NestedWindowProbe : IDisposable
     public bool IsIconified(ulong xid) => ReadState(xid) == IconicState;
 
     /// <summary>
-    /// Iconifies a window the way an X11 window manager would: set
-    /// <c>WM_STATE=IconicState</c> and unmap it. The client then sees exactly
-    /// the transition KWin gives it, which is what makes Wine keep its own
-    /// minimize state consistent (mapping without that transition makes it
-    /// re-minimize itself a moment later).
-    /// </summary>
-    public bool Iconify(ulong xid)
-    {
-        if (xid == 0 || _wmStateAtom == 0) return false;
-        try
-        {
-            WriteState(xid, IconicState);
-            X11Native.XUnmapWindow(_display.Handle, xid);
-            _display.Sync();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"nested window probe: iconify 0x{xid:x} failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Deiconifies a window the way a window manager would: set
-    /// <c>WM_STATE=NormalState</c> and map it. The window was unmapped by
-    /// <see cref="Iconify"/>, so this is a real map transition for the client.
+    /// Deiconifies a window the way an X11 window manager would. wlroots keeps
+    /// the surface mapped while iconic, so a plain XMapWindow is a no-op and
+    /// the client sees no map transition. Unmap+map forces the client to
+    /// observe a real transition and repaint.
     /// </summary>
     public bool Deiconify(ulong xid)
     {
@@ -118,6 +95,9 @@ internal sealed class NestedWindowProbe : IDisposable
         try
         {
             WriteState(xid, NormalState);
+            X11Native.XUnmapWindow(_display.Handle, xid);
+            _display.Sync();
+            Thread.Sleep(30);
             X11Native.XMapRaised(_display.Handle, xid);
             _display.Sync();
             return true;
@@ -125,51 +105,6 @@ internal sealed class NestedWindowProbe : IDisposable
         catch (Exception ex)
         {
             Log.Warn($"nested window probe: deiconify 0x{xid:x} failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>True while the X window still exists on the nested server.</summary>
-    public bool IsAlive(ulong xid)
-    {
-        if (_disposed || xid == 0) return false;
-        try
-        {
-            return X11Native.XGetWindowAttributes(_display.Handle, xid,
-                out _) != 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Asks a (possibly iconic) X11 window to close, like a WM would.</summary>
-    public bool RequestClose(ulong xid)
-    {
-        if (_disposed || xid == 0) return false;
-        try
-        {
-            ulong protocols = X11Native.XInternAtom(_display.Handle, "WM_PROTOCOLS", 0);
-            ulong deleteWindow = X11Native.XInternAtom(_display.Handle, "WM_DELETE_WINDOW", 0);
-            if (protocols == 0 || deleteWindow == 0) return false;
-            var ev = new X11Native.XClientMessageEvent
-            {
-                Type = ClientMessageType,
-                SendEvent = 1,
-                Display = _display.Handle,
-                Window = xid,
-                MessageType = protocols,
-                Format = 32,
-                Data0 = (long)deleteWindow
-            };
-            X11Native.XSendEvent(_display.Handle, xid, 0, 0, ref ev);
-            _display.Flush();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"nested window probe: close 0x{xid:x} failed: {ex.Message}");
             return false;
         }
     }
