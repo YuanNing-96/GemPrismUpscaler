@@ -19,6 +19,7 @@ public sealed class NestedSession : IDisposable
     private readonly string[] _command;
     private readonly int _width;
     private readonly int _height;
+    private readonly int _refreshMilliHz;
     private readonly string _token;
     private Process? _sway;
     private Process? _commandProcess;
@@ -34,6 +35,7 @@ public sealed class NestedSession : IDisposable
 
     public int Width => _width;
     public int Height => _height;
+    public int RefreshMilliHz => _refreshMilliHz;
     public string? RuntimeDirectory => _runtimeDir;
     public string? WaylandDisplay { get; private set; }
     public string? SwaySocket { get; private set; }
@@ -44,7 +46,7 @@ public sealed class NestedSession : IDisposable
     public bool IsRunning => _sway is { HasExited: false };
 
     public NestedSession(string swayPath, string[] command, int width = 1280, int height = 720,
-        string? swayMsgPath = null, string? token = null)
+        string? swayMsgPath = null, string? token = null, int refreshMilliHz = 0)
     {
         if (string.IsNullOrWhiteSpace(swayPath))
             throw new ArgumentException("sway path is required", nameof(swayPath));
@@ -55,6 +57,7 @@ public sealed class NestedSession : IDisposable
         _command = command;
         _width = width;
         _height = height;
+        _refreshMilliHz = refreshMilliHz is < 0 or > 1_000_000 ? 0 : refreshMilliHz;
         _token = string.IsNullOrWhiteSpace(token)
             ? $"gp-{Environment.ProcessId}-{Guid.NewGuid():N}"
             : token;
@@ -195,7 +198,10 @@ public sealed class NestedSession : IDisposable
 
     private void LaunchSway(ProcessStartInfo psi)
     {
-        Log.Info($"nested: starting sway path='{_swayPath}' output={_width}x{_height} runtime='{_runtimeDir}'");
+        Log.Info($"nested: starting sway path='{_swayPath}' " +
+                 $"output={_width}x{_height}@{_refreshMilliHz / 1000.0:0.###}Hz " +
+                 $"({(_refreshMilliHz > 0 ? "monitor mode snapshot" : "refresh unknown")}) " +
+                 $"runtime='{_runtimeDir}'");
         var process = Process.Start(psi) ?? throw new InvalidOperationException("failed to start sway");
         _sway = process;
         // Keep the compositor's own stderr: it is where wlroots reports
@@ -264,7 +270,7 @@ public sealed class NestedSession : IDisposable
         }
 
         _configPath = Path.Combine(_runtimeDir, "sway.conf");
-        SwayConfig.Write(_configPath, _width, _height);
+        SwayConfig.Write(_configPath, _width, _height, refreshMilliHz: _refreshMilliHz);
 
         var psi = new ProcessStartInfo
         {

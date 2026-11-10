@@ -34,24 +34,30 @@ public sealed class SwayOutputPool
     private readonly string _baseOutput;
     private readonly int _width;
     private readonly int _height;
+    private readonly int _refreshMilliHz;
     private readonly List<SwayOutputInfo> _outputs = new();
     private int _nextIndex;
 
-    public SwayOutputPool(SwayIpc ipc, string baseOutput, int width, int height)
+    public SwayOutputPool(SwayIpc ipc, string baseOutput, int width, int height,
+        int refreshMilliHz = 0)
     {
         if (width is < 320 or > 16384)
             throw new ArgumentOutOfRangeException(nameof(width));
         if (height is < 240 or > 16384)
             throw new ArgumentOutOfRangeException(nameof(height));
+        if (refreshMilliHz is < 0 or > 1_000_000)
+            throw new ArgumentOutOfRangeException(nameof(refreshMilliHz));
         _ipc = ipc;
         _baseOutput = string.IsNullOrWhiteSpace(baseOutput) ? SwayConfig.DefaultOutput : baseOutput;
         _width = width;
         _height = height;
+        _refreshMilliHz = refreshMilliHz;
     }
 
     public string BaseOutput => _baseOutput;
     public int Width => _width;
     public int Height => _height;
+    public int RefreshMilliHz => _refreshMilliHz;
     public IReadOnlyList<SwayOutputInfo> Outputs => _outputs;
 
     public RectI LayoutBounds
@@ -293,9 +299,10 @@ public sealed class SwayOutputPool
 
     private void SetResolution(string name, int width, int height)
     {
-        if (!_ipc.RunCommand($"output {name} resolution {width}x{height}"))
+        string mode = SwayConfig.Mode(width, height, _refreshMilliHz);
+        if (!_ipc.RunCommand($"output {name} resolution {mode}"))
             throw new InvalidOperationException(
-                $"sway output '{name}' resolution {width}x{height} failed");
+                $"sway output '{name}' resolution {mode} failed");
     }
 
     private bool WaitForSize(string name, int width, int height, TimeSpan timeout)

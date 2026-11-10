@@ -240,6 +240,56 @@ internal static unsafe class X11Native
         public IntPtr Outputs;
     }
 
+    /// <summary>XRRModeInfo from libXrandr (64-bit layout).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XRRModeInfo
+    {
+        public ulong Id;
+        public uint Width;
+        public uint Height;
+        public ulong DotClock;
+        public uint HSyncStart;
+        public uint HSyncEnd;
+        public uint HTotal;
+        public uint HSkew;
+        public uint VSyncStart;
+        public uint VSyncEnd;
+        public uint VTotal;
+        public IntPtr Name;
+        public uint NameLength;
+        public ulong ModeFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XRRScreenResources
+    {
+        public ulong Timestamp;
+        public ulong ConfigTimestamp;
+        public int NCrtc;
+        public IntPtr Crtcs;
+        public int NOutput;
+        public IntPtr Outputs;
+        public int NMode;
+        public IntPtr Modes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XRRCrtcInfo
+    {
+        public ulong Timestamp;
+        public int X;
+        public int Y;
+        public uint Width;
+        public uint Height;
+        public ulong Mode;
+        public ushort Rotation;
+        public int NOutput;
+        public IntPtr Outputs;
+        public ushort Rotations;
+        public int NPossible;
+        public IntPtr Possible;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct XSetWindowAttributes
     {
@@ -354,6 +404,10 @@ internal static unsafe class X11Native
     [DllImport(Xrandr)] public static extern IntPtr XRRGetMonitors(IntPtr display, ulong window, int getActive, out int nmonitors);
     [DllImport(Xrandr)] public static extern void XRRFreeMonitors(IntPtr monitors);
     [DllImport(Xrandr)] public static extern int XRRSelectInput(IntPtr display, ulong window, int mask);
+    [DllImport(Xrandr)] public static extern IntPtr XRRGetScreenResourcesCurrent(IntPtr display, ulong window);
+    [DllImport(Xrandr)] public static extern void XRRFreeScreenResources(IntPtr resources);
+    [DllImport(Xrandr)] public static extern IntPtr XRRGetCrtcInfo(IntPtr display, IntPtr resources, ulong crtc);
+    [DllImport(Xrandr)] public static extern void XRRFreeCrtcInfo(IntPtr crtcInfo);
 
     [DllImport(Libc, EntryPoint = "shmget")] public static extern int shmget(int key, nuint size, int shmflg);
     [DllImport(Libc, EntryPoint = "shmat")] public static extern IntPtr shmat(int shmid, IntPtr shmaddr, int shmflg);

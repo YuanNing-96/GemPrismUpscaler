@@ -1,17 +1,32 @@
+using System.Globalization;
+
 namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 
 /// <summary>
 /// Minimal sway configuration for the private nested session. The base output
-/// is a headless display at the target monitor's physical resolution; the
-/// output pool creates additional outputs for each game toplevel. Windows are
-/// kept floating so a windowed game can resize itself; fullscreen clients are
-/// still fullscreen through sway.
+/// is a headless display at the target monitor's physical resolution and
+/// refresh rate; the output pool creates additional outputs for each game
+/// toplevel. Windows are kept floating so a windowed game can resize itself;
+/// fullscreen clients are still fullscreen through sway.
 /// </summary>
 public static class SwayConfig
 {
     public const string DefaultOutput = "HEADLESS-1";
 
-    public static string Build(int width, int height, string output = DefaultOutput)
+    /// <summary>
+    /// Formats the sway mode argument. A known physical refresh rate is part of
+    /// the mode so the virtual desktop paces like the monitor; 0 means the host
+    /// did not report one and sway keeps its default.
+    /// </summary>
+    public static string Mode(int width, int height, int refreshMilliHz = 0)
+    {
+        if (refreshMilliHz <= 0) return $"{width}x{height}";
+        string hz = (refreshMilliHz / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
+        return $"{width}x{height}@{hz}Hz";
+    }
+
+    public static string Build(int width, int height, string output = DefaultOutput,
+        int refreshMilliHz = 0)
     {
         if (width is < 320 or > 16384)
             throw new ArgumentOutOfRangeException(nameof(width), "nested output width out of range");
@@ -19,9 +34,12 @@ public static class SwayConfig
             throw new ArgumentOutOfRangeException(nameof(height), "nested output height out of range");
         if (string.IsNullOrWhiteSpace(output))
             throw new ArgumentException("output name is required", nameof(output));
+        if (refreshMilliHz is < 0 or > 1_000_000)
+            throw new ArgumentOutOfRangeException(nameof(refreshMilliHz),
+                "nested output refresh out of range");
 
         return $"""
-            output {output} resolution {width}x{height}
+            output {output} resolution {Mode(width, height, refreshMilliHz)}
             xwayland enable
             default_border none
             default_floating_border none
@@ -34,8 +52,9 @@ public static class SwayConfig
             """;
     }
 
-    public static void Write(string path, int width, int height, string output = DefaultOutput)
+    public static void Write(string path, int width, int height, string output = DefaultOutput,
+        int refreshMilliHz = 0)
     {
-        File.WriteAllText(path, Build(width, height, output));
+        File.WriteAllText(path, Build(width, height, output, refreshMilliHz));
     }
 }

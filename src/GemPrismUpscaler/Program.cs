@@ -152,6 +152,7 @@ sealed class Program
                 Console.WriteLine("monitors:");
                 foreach (var m in X11MonitorEnumerator.List(display))
                     Console.WriteLine($"  {m.Name} {m.Width}x{m.Height}+{m.X}+{m.Y}" +
+                                      $"{(m.HasRefresh ? $"@{m.RefreshMilliHz / 1000.0:0.###}Hz" : string.Empty)}" +
                                       $"{(m.Primary ? " primary" : string.Empty)}");
                 Console.WriteLine("windows:");
                 foreach (var w in X11WindowEnumerator.List(display))
@@ -363,7 +364,7 @@ sealed class Program
                          Path.Combine(Path.GetTempPath(), "gemprism-toplevel-probe.ppm");
 
         using var session = new NestedSession(swayPath, command, monitor.Width, monitor.Height,
-            swayMsgPath);
+            swayMsgPath, refreshMilliHz: monitor.RefreshMilliHz);
         try
         {
             session.Start();
@@ -401,7 +402,8 @@ sealed class Program
         string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
         string[] command = args[(separator + 1)..];
 
-        using var session = new NestedSession(swayPath, command, width, height, swayMsgPath);
+        using var session = new NestedSession(swayPath, command, width, height, swayMsgPath,
+            refreshMilliHz: monitor.RefreshMilliHz);
         NestedUpscaleSession? nestedSession = null;
         _nestedStopRequested = false;
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
@@ -479,7 +481,8 @@ sealed class Program
         string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
         // The command is unused in session mode but NestedSession keeps one
         // command slot for the one-shot path. It is never started here.
-        using var session = new NestedSession(swayPath, new[] { "true" }, width, height, swayMsgPath);
+        using var session = new NestedSession(swayPath, new[] { "true" }, width, height, swayMsgPath,
+            refreshMilliHz: monitor.RefreshMilliHz);
         NestedUpscaleSession? nestedSession = null;
         _nestedStopRequested = false;
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>

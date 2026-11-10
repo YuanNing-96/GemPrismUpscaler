@@ -165,14 +165,16 @@ public sealed class NestedUpscaleSession : IDisposable
         }
         else
         {
-            _pool = new SwayOutputPool(_ipc, SwayConfig.DefaultOutput, _outputWidth, _outputHeight);
+            _pool = new SwayOutputPool(_ipc, SwayConfig.DefaultOutput, _outputWidth, _outputHeight,
+                _session.RefreshMilliHz);
             _pool.Initialize();
         }
         _input = new NestedInput(_session.Display, _session.WaylandDisplay);
         EnsureMinimizeProbe();
 
         Log.Info($"nested {(_toplevelMode ? "single-output/toplevel-capture" : "multi-window")}: " +
-                 $"monitor='{_monitorName ?? "auto"}' output={_outputWidth}x{_outputHeight} " +
+                 $"monitor='{_monitorName ?? "auto"}' " +
+                 $"output={_outputWidth}x{_outputHeight}@{_session.RefreshMilliHz / 1000.0:0.###}Hz " +
                  $"base='{_pool?.BaseOutput ?? SwayConfig.DefaultOutput}' " +
                  $"mode={(_mode == ScalingMode.Fit ? "fit" : "stretch")} effect='{_effect.Id}'");
     }

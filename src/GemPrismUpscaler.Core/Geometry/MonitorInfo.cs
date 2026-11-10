@@ -10,12 +10,18 @@ public readonly record struct MonitorInfo(
     int Y,
     int Width,
     int Height,
-    bool Primary)
+    bool Primary,
+    int RefreshMilliHz = 0)
 {
     public RectI Bounds => new(X, Y, Width, Height);
 
+    /// <summary>True when the X server reported a real refresh rate.</summary>
+    public bool HasRefresh => RefreshMilliHz > 0;
+
     public override string ToString() =>
-        $"{Name} {Width}x{Height}+{X}+{Y}" + (Primary ? " (primary)" : "");
+        $"{Name} {Width}x{Height}+{X}+{Y}" +
+        (HasRefresh ? $"@{RefreshMilliHz / 1000.0:0.###}Hz" : string.Empty) +
+        (Primary ? " (primary)" : string.Empty);
 }
 
 public static class MonitorSelector
