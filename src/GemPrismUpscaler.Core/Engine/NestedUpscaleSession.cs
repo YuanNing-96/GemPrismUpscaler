@@ -1298,19 +1298,22 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void MirrorMinimize(WindowState state)
     {
-        // Without a host there is nothing to minimize, and nothing would ever
-        // restore the state: keep rendering instead.
-        if (state.Host is null) return;
-        state.Minimized = true;
-        // Act as the window manager: unmap the game window with
-        // WM_STATE=IconicState. Mapping it back later (on host restore) is then
-        // a real transition for Wine; mapping a window it never saw unmapped
-        // makes it re-send the minimize request a moment later.
-        if (state.Info.X11Window != 0 && _probe is not null)
-            _probe.Iconify(state.Info.X11Window);
-        state.Host.Iconify();
+        // The client hides itself and paints one black frame before it stops
+        // painting; presenting that frame is the "host flashes black on Esc"
+        // report. Hold black frames for a moment so the last real frame stays
+        // on screen.
+        //
+        // The host window is not minimized and the game window is not
+        // unmapped: Wine cannot be brought back from a client-side map inside
+        // the nested session. It re-sends the minimize request ~25ms after
+        // every map (even when the map follows KWin's exact
+        // _NET_WM_STATE_HIDDEN/WM_STATE order, verified against a direct run),
+        // because its Win32 minimized state is never cleared by a map. The
+        // window would bounce to the taskbar right after the user restores it,
+        // which is worse than leaving it on screen with the last frame.
+        state.SuppressBlackUntil = Environment.TickCount64 + 600;
         Emit($"nested window '{DescribeWindow(state.Info)}' asked to minimize; " +
-             "minimizing host (restore it from the taskbar to bring the game back)");
+             "holding the black frame (host keeps the last frame)");
     }
 
     /// <summary>
@@ -1676,7 +1679,7 @@ public sealed class NestedUpscaleSession : IDisposable
         {
             // Keep the last good frame instead of a torn-down surface's copy.
             state.ForceRender = false;
-            Emit($"nested black frame suppressed after restore for " +
+            Emit($"nested black frame held back for " +
                  $"'{DescribeWindow(state.Info)}'");
             return false;
         }

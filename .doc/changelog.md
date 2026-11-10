@@ -52,16 +52,15 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - **移除每秒强制绝对定位**：那是“光标不会跳”时期的兜底，会让嵌套指针每秒被拉回宿主演算
   位置、与 sway 刚回报的 warp 参考点互相拉扯。现在只保留 sway hint 触发的参考点重设，
   以及点击/进入时的一次绝对定位。归档见 `.agent/M2b-归档-指针周期绝对刷新.md`。
-- **X11 游戏的最小化镜像到宿主窗口**：Wine 按 ICCCM 发 `WM_CHANGE_STATE(IconicState)` 请求
-  最小化，KWin 直连时照办，嵌套的 sway 却没有最小化概念、把请求忽略掉：游戏窗口留在虚拟桌面上，
-  客户端停止绘制，宿主还停在它隐藏前画出的那一帧全黑画面上，看起来就是按 Esc 后“黑闪一下”。
-  现在探针在嵌套 XWayland 的 root 上监听这个 ClientMessage，收到后按窗口管理器的方式把游戏窗口
-  iconify（加 `_NET_WM_STATE_HIDDEN` → unmap → 最后写 `WM_STATE=Iconic`，顺序按 KDE 直连实测的
-  KWin 行为），再 `set_minimized` 宿主窗口。从任务栏恢复宿主时按 KWin 的顺序 反过来
-  （去 hidden → map → 写 `WM_STATE=Normal`），并为重建出来的 toplevel 新建 capture；顺序反了
-  Wine 会在 40ms 后自己再发一次最小化请求（窗口刚恢复就又进任务栏）。恢复瞬间被拆掉的 surface
-  会送来一帧全黑，500ms 内丢弃，避免恢复时再闪一次。Wayland 游戏（秽翼 160×31 那条）仍按
-  `.agent/M2b-归档-游戏自我最小化.md` 的结论不处理。
+- **X11 游戏按 Esc 最小化时宿主“黑闪一下”**：Wine 按 ICCCM 发 `WM_CHANGE_STATE(IconicState)`
+  请求最小化，KWin 直连时会照办，嵌套的 sway 却忽略该请求；客户端在隐藏自己之前会画一帧全黑，
+  宿主把那一帧呈现出来就是你看到的“黑一下”。现在探针在嵌套 XWayland 的 root 上监听这个
+  ClientMessage（`SubstructureNotifyMask`，不能选 `SubstructureRedirectMask`），收到后 600ms 内
+  丢弃整帧全黑的候选帧，宿主保持上一帧、不闪；游戏本身照常运行，不受影响。
+  没有把“宿主跟着最小化”做下去：Wine 在窗口被客户端 map 之后 ~25ms 会再发一次最小化请求
+  （即使完全照搬 KDE 直连实测到的 KWin 顺序：`_NET_WM_STATE_HIDDEN` → map → `WM_STATE=Normal`
+  也一样），宿主会在用户点开后被立刻弹回任务栏，比保持显示更糟。测试与对照记录见
+  `.agent/M2b-归档-游戏自我最小化.md`。
 
 ### 验证
 
