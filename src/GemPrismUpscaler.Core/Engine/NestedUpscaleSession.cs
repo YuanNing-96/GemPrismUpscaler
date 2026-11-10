@@ -453,7 +453,8 @@ public sealed class NestedUpscaleSession : IDisposable
 
         var removals = _states.Values
             .Where(s => s.MissingSince != 0 &&
-                        nowTick - s.MissingSince >= MissingWindowGraceMs)
+                        (s.CloseForwarded ||
+                         nowTick - s.MissingSince >= MissingWindowGraceMs))
             .ToList();
         foreach (var state in removals)
             CloseState(state, releaseOutput: true);
@@ -1263,19 +1264,52 @@ public sealed class NestedUpscaleSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// The user clicked the KDE close button on our mirror window. On a normal
+    /// desktop that click is the compositor sending <c>xdg_toplevel.close</c>
+    /// to the game client, so forward the same request to the game window in
+    /// the nested compositor instead of tearing down the session.
+    ///
+    /// <para>Closing the mirror used to end the session and kill the whole
+    /// process tree, which also killed the game when the user only wanted to
+    /// dismiss an exit-confirmation dialog ("close the dialog, game keeps
+    /// running" is what KDE does).</para>
+    /// </summary>
     private void HandleHostClose(WindowState state)
     {
-        if (state.Ignored) return;
-        if (_waitForCommand)
+        if (state.Ignored || _stop) return;
+
+        // A dialog is a separate sway view, so a plain close request reaches
+        // exactly that view: sway sends xdg_toplevel.close to a Wayland client
+        // and WM_DELETE_WINDOW to an XWayland one.
+        if (_ipc is not null && state.Id != 0)
         {
-            SetExitReason("host window closed");
-            _stop = true;
-            return;
+            bool forwarded;
+            try
+            {
+                forwarded = _ipc.RunCommand($"[con_id={state.Id}] kill");
+            }
+            catch (Exception ex)
+            {
+                forwarded = false;
+                Log.Warn($"nested host close forward failed: {ex.Message}");
+            }
+            Emit($"nested host close requested for '{DescribeWindow(state.Info)}'; " +
+                 $"forwarded to the nested window (ok={forwarded})");
+            if (forwarded)
+            {
+                // The view disappears from sway's tree once the client honours
+                // the request; Reconcile then disposes this mirror without the
+                // usual grace period, so the window does not linger for a
+                // second after the click. If the client ignores the request the
+                // window stays, exactly as it would for a direct Wayland client.
+                state.CloseForwarded = true;
+                return;
+            }
         }
 
-        // Session mode: close only this KDE window. Keep the game window and
-        // its output alive; if the game closes later the output is released by
-        // the normal reconcile path.
+        // No IPC or the request was rejected: only close this mirror window and
+        // keep the session (and the game) running.
         state.Ignored = true;
         if (_focusedId == state.Id) _focusedId = 0;
         DisposeStateResources(state);
@@ -1642,6 +1676,12 @@ public sealed class NestedUpscaleSession : IDisposable
         public VulkanBlitter? Blitter { get; set; }
         public bool Upscale { get; set; }
         public bool Switching { get; set; }
+        /// <summary>
+        /// The user closed this host window and the close request was forwarded
+        /// to the game window; remove the mirror as soon as that view is gone
+        /// instead of waiting for the missing-window grace period.
+        /// </summary>
+        public bool CloseForwarded { get; set; }
         public bool ForceRender { get; set; }
         public bool CloseRequested { get; set; }
         public bool PendingOriginal { get; set; }
