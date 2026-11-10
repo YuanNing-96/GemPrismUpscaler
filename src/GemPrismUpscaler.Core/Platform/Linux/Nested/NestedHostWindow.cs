@@ -43,6 +43,7 @@ public sealed class NestedHostWindow : IHostWindow
     public bool IsFullscreen => _fullscreen;
     public string MonitorName => _monitor.Name;
     public bool IsWayland => false;
+    public bool CanResize => true;
     public IntPtr VulkanDisplay => IntPtr.Zero;
     public IntPtr VulkanSurface => IntPtr.Zero;
 

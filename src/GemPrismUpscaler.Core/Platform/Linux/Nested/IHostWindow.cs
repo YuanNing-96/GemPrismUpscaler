@@ -28,6 +28,13 @@ public interface IHostWindow : IDisposable
     int Height { get; }
     string MonitorName { get; }
 
+    /// <summary>
+    /// True when <see cref="SetOriginalSize"/> can resize the live window.
+    /// xdg_toplevel has no client-side resize request, so a Wayland host has to
+    /// be recreated at the new size instead.
+    /// </summary>
+    bool CanResize { get; }
+
     /// <summary>Native wl_display/wl_surface for Vulkan WSI, 0 for X11.</summary>
     IntPtr VulkanDisplay { get; }
     IntPtr VulkanSurface { get; }

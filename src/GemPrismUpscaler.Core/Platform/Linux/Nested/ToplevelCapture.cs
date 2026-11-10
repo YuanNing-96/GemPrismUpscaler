@@ -64,6 +64,8 @@ public sealed class ToplevelCapture : INestedFrameSource
     private WlShm.FormatEnum _format = WlShm.FormatEnum.Xrgb8888;
     private byte[] _raw = Array.Empty<byte>();
     private byte[] _pixels = Array.Empty<byte>();
+    private NestedFrame _lastFrame;
+    private bool _stopReported;
     private bool _constraintsDone;
     private bool _sizeDirty;
     private long _sequence;
@@ -176,7 +178,7 @@ public sealed class ToplevelCapture : INestedFrameSource
         _bufferSize = _sourceStride * Height;
         Stride = Width * 4;
         _pixels = new byte[Stride * Height];
-        _raw = new byte[_bufferSize];
+        _lastFrame = default;
 
         _fd = memfd_create("gemprism-toplevel-capture", 0);
         if (_fd < 0) throw new InvalidOperationException("memfd_create failed");
@@ -240,8 +242,29 @@ public sealed class ToplevelCapture : INestedFrameSource
 
             if (_pending.IsFailed)
             {
-                Log.Warn($"toplevel capture '{AppId}' failed: {_pending.Failure}");
+                string failure = _pending.Failure;
                 DestroyPending();
+                // BufferConstraints is the normal answer to a resize: the
+                // compositor wants a buffer of the new size. Reallocate on the
+                // next call instead of logging a warning for every attempt.
+                if (string.Equals(failure, "BufferConstraints", StringComparison.Ordinal))
+                {
+                    _sizeDirty = true;
+                    Log.Debug($"toplevel capture '{AppId}' buffer constraints changed; resizing");
+                    return false;
+                }
+                // The window closed: every later attempt fails the same way, so
+                // report it once instead of flooding the log at loop rate.
+                if (string.Equals(failure, "Stopped", StringComparison.Ordinal))
+                {
+                    if (!_stopReported)
+                    {
+                        _stopReported = true;
+                        Log.Info($"toplevel capture '{AppId}' stopped (window closed)");
+                    }
+                    return false;
+                }
+                Log.Warn($"toplevel capture '{AppId}' failed: {failure}");
                 return false;
             }
 
@@ -252,6 +275,8 @@ public sealed class ToplevelCapture : INestedFrameSource
             DestroyPending();
             Interlocked.Increment(ref _sequence);
             frame = new NestedFrame(Width, Height, Stride, Sequence);
+            _lastFrame = frame;
+            _stopReported = false;
             return true;
         }
         catch (Exception ex)
@@ -342,6 +367,14 @@ public sealed class ToplevelCapture : INestedFrameSource
     }
 
     public ReadOnlySpan<byte> Pixels => _pixels;
+
+    public bool HasFrame => _lastFrame.Width > 0;
+
+    public bool TryGetLastFrame(out NestedFrame frame)
+    {
+        frame = _lastFrame;
+        return _lastFrame.Width > 0 && _lastFrame.Height > 0;
+    }
 
     bool INestedFrameSource.TryCapture(out NestedFrame frame) => TryCapture(out frame, 0);
 

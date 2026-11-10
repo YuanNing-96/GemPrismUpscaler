@@ -37,6 +37,7 @@ public sealed class NestedCapture : INestedFrameSource
     private readonly ZwlrScreencopyManagerV1 _manager;
     private readonly string _outputName;
     private byte[] _pixels = Array.Empty<byte>();
+    private NestedFrame _lastFrame;
     private byte[] _raw = Array.Empty<byte>();
     private bool _warnedFormat;
     private long _sequence;
@@ -111,6 +112,7 @@ public sealed class NestedCapture : INestedFrameSource
                 $"nested output '{(_outputName.Length == 0 ? preferredOutput : _outputName)}' has no current mode");
         Stride = Width * 4;
         _pixels = new byte[Stride * Height];
+        _lastFrame = default;
 
         _manager = ZwlrScreencopyManagerV1.Bind(_registry, managerGlobal.Name,
             Math.Min(managerGlobal.Version, 3), new ManagerListener(), null);
@@ -182,6 +184,7 @@ public sealed class NestedCapture : INestedFrameSource
                 // compositor's read format.
                 Stride = Width * 4;
                 _pixels = new byte[Stride * Height];
+        _lastFrame = default;
                 Log.Info($"nested capture: resized {Width}x{Height} stride={Stride}");
             }
 
@@ -200,6 +203,7 @@ public sealed class NestedCapture : INestedFrameSource
             _sourceIsRgb = true;
             Interlocked.Increment(ref _sequence);
             frame = new NestedFrame(Width, Height, Stride, Sequence);
+            _lastFrame = frame;
             return true;
         }
         catch (Exception ex)
@@ -251,6 +255,14 @@ public sealed class NestedCapture : INestedFrameSource
     }
 
     public ReadOnlySpan<byte> Pixels => _pixels;
+
+    public bool HasFrame => _lastFrame.Width > 0;
+
+    public bool TryGetLastFrame(out NestedFrame frame)
+    {
+        frame = _lastFrame;
+        return _lastFrame.Width > 0 && _lastFrame.Height > 0;
+    }
 
     public void Dispose()
     {

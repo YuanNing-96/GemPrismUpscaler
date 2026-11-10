@@ -108,6 +108,9 @@ public sealed class WaylandHostWindow : IHostWindow
     public bool IsFocused => _activated;
     public bool IsFullscreen => _fullscreen;
     public bool IsWayland => true;
+    // xdg-shell has no "resize to WxH" request; the session recreates the
+    // toplevel when the game window changes size.
+    public bool CanResize => false;
     public int Width => _width;
     public int Height => _height;
     public string MonitorName => _output?.Name ?? string.Empty;

@@ -28,13 +28,21 @@ public static class HostSurfaceGeometry
             ? scale
             : 1.0;
 
+    /// <summary>
+    /// Half-way values round away from zero, not to even. At 1.5x a 197 pixel
+    /// window maps to 131 logical units, and 131 * 1.5 = 196.5 must come back
+    /// as 197: banker's rounding would return 196 and the window would look
+    /// one pixel too small on every rebuild.
+    /// </summary>
+    public const MidpointRounding Rounding = MidpointRounding.AwayFromZero;
+
     /// <summary>Presentation pixels to surface-local units.</summary>
     public static int ToLogical(int pixels, double scale)
-        => Math.Max(1, (int)Math.Round(pixels / Sanitize(scale)));
+        => Math.Max(1, (int)Math.Round(pixels / Sanitize(scale), Rounding));
 
     /// <summary>Surface-local units to presentation pixels.</summary>
     public static int ToPixels(int logical, double scale)
-        => Math.Max(1, (int)Math.Round(logical * Sanitize(scale)));
+        => Math.Max(1, (int)Math.Round(logical * Sanitize(scale), Rounding));
 
     /// <summary>
     /// Convert one pointer axis from surface-local to presentation pixels and
@@ -44,14 +52,14 @@ public static class HostSurfaceGeometry
     /// </summary>
     public static int LocalToPixel(int local, double scale, int pixels)
     {
-        int value = (int)Math.Round(local * Sanitize(scale));
+        int value = (int)Math.Round(local * Sanitize(scale), Rounding);
         return Math.Clamp(value, 0, Math.Max(0, pixels - 1));
     }
 
     /// <summary>Convert one presentation pixel to the surface-local coordinate.</summary>
     public static int PixelToLocal(int pixel, double scale, int logical)
     {
-        int value = (int)Math.Round(pixel / Sanitize(scale));
+        int value = (int)Math.Round(pixel / Sanitize(scale), Rounding);
         return Math.Clamp(value, 0, Math.Max(0, logical - 1));
     }
 }

@@ -18,6 +18,12 @@ namespace GemPrismUpscaler.Core.Engine;
 public sealed class NestedUpscaleSession : IDisposable
 {
     private const int MissingWindowGraceMs = 1000;
+    /// <summary>
+    /// A game resizing its own window produces a burst of intermediate sizes
+    /// (Wine animates or resizes in steps). Rebuilding a Wayland host window on
+    /// every step would flicker, so wait until the requested size is stable.
+    /// </summary>
+    private const int HostResizeDebounceMs = 350;
     private const int FailedWindowRetryMs = 1200;
     private const int MinimizePollMs = 120;
 
@@ -634,30 +640,13 @@ public sealed class NestedUpscaleSession : IDisposable
             var parentState = dialog ? FindDialogParent(window) : null;
             state.Info = window;
             state.IsDialog = dialog;
+            state.ParentId = parentState?.Id;
             state.Host = CreateHostWindow(title, state.SourceWidth, state.SourceHeight,
                 state.LastGameFullscreen, parentState, dialog);
             state.LastHostWidth = state.Host.Width;
             state.LastHostHeight = state.Host.Height;
             state.LastTitle = title;
-
-            state.Host.Pointer += e => OnPointer(state, e);
-            state.Host.Key += e => OnKey(state, e);
-            state.Host.Modifiers += m =>
-            {
-                _modifiers = m;
-                _input?.HandleModifiers(m);
-            };
-            state.Host.FocusChanged += focused => OnHostFocusChanged(state, focused);
-            state.Host.Closed += () => state.CloseRequested = true;
-            state.Host.CloseRequested += () => state.CloseRequested = true;
-
-            // The host draws through a Vulkan swapchain, which has no retained
-            // front buffer. If the compositor discards our window contents
-            // (occluded, newly mapped) and the game frame is static, the dirty
-            // diff would skip presenting and the host would stay black. An
-            // Expose must always force one fresh present.
-            state.Host.Exposed += () => state.ForceRender = true;
-            state.Host.Restored += () => RestoreMinimizedWindow(state);
+            WireHost(state);
 
             state.Blitter = state.Host.CreateBlitter(OriginalEffect, capture.SourceIsRgb);
             state.Diff.Reset();
@@ -745,12 +734,30 @@ public sealed class NestedUpscaleSession : IDisposable
             // window rect (the input target) changes on move/resize. Keep the
             // windowed restore size in sync with the real rect so leaving
             // upscale returns to the size the user was looking at.
-            if (!state.Upscale && state.Info.FullscreenMode == 0 &&
+            bool gameFullscreen = state.Info.FullscreenMode != 0;
+            if (!state.Upscale && !gameFullscreen &&
                 state.Info.Rect.Width > 0 && state.Info.Rect.Height > 0)
             {
+                bool sizeChanged = state.WindowedWidth != state.Info.Rect.Width ||
+                                   state.WindowedHeight != state.Info.Rect.Height;
                 state.WindowedWidth = state.Info.Rect.Width;
                 state.WindowedHeight = state.Info.Rect.Height;
+                // Follow a game that changed its own window size. An X11 host
+                // resizes in place; a Wayland host is rebuilt (debounced)
+                // because xdg_toplevel has no resize request.
+                if (sizeChanged) ApplyHostRestoreSize(state);
             }
+
+            // The host mirrors the game's own fullscreen state in original
+            // mode, so switching fullscreen inside the game is visible without
+            // pressing the upscale hotkey.
+            if (gameFullscreen != state.LastGameFullscreen)
+            {
+                state.LastGameFullscreen = gameFullscreen;
+                if (!state.Upscale && !state.Switching && state.Host is not null)
+                    ApplyOriginal(state);
+            }
+
             state.Crop = state.Info.Rect;
             UpdateDest(state);
             return;
@@ -848,13 +855,49 @@ public sealed class NestedUpscaleSession : IDisposable
         return crop;
     }
 
-    private static void ApplyHostRestoreSize(WindowState state)
+    /// <summary>
+    /// Make the host window cover the game window's current size.
+    ///
+    /// <para>X11 can move/resize the window in place. A Wayland toplevel cannot:
+    /// xdg-shell has no resize request, so the host is rebuilt when the request
+    /// has been stable for <see cref="HostResizeDebounceMs"/> (or immediately
+    /// during a mode switch, where the caller is already pausing the loop).</para>
+    /// </summary>
+    private void ApplyHostRestoreSize(WindowState state, bool immediate = false)
     {
         if (state.Host is null) return;
         int width = state.WindowedWidth > 0 ? state.WindowedWidth : state.SourceWidth;
         int height = state.WindowedHeight > 0 ? state.WindowedHeight : state.SourceHeight;
-        if (width > 0 && height > 0)
+        if (width < 64 || height < 64) return;
+
+        if (state.Host.CanResize)
+        {
             state.Host.SetOriginalSize(width, height);
+            return;
+        }
+
+        // Never rebuild while the host is fullscreen; the size is applied when
+        // the windowed mode is entered again.
+        if (state.Upscale || state.LastGameFullscreen)
+        {
+            state.ResizeTarget = null;
+            return;
+        }
+
+        if (Math.Abs(width - state.Host.Width) <= 2 &&
+            Math.Abs(height - state.Host.Height) <= 2)
+        {
+            state.ResizeTarget = null;
+            return;
+        }
+
+        var target = (Width: width, Height: height);
+        if (state.ResizeTarget != target)
+        {
+            state.ResizeTarget = target;
+            state.ResizeTargetAt = Environment.TickCount64;
+        }
+        if (immediate) RebuildHost(state, width, height);
     }
 
     private void ApplyOriginal(WindowState state)
@@ -874,7 +917,7 @@ public sealed class NestedUpscaleSession : IDisposable
                 // with the fullscreen crop: it becomes KWin's restore size
                 // and leaves the "windowed" host at 4K without decorations.
                 state.Host.SetFullscreen(false);
-                ApplyHostRestoreSize(state);
+                ApplyHostRestoreSize(state, immediate: true);
             }
             PumpHost(state, 8);
             ReplaceBlitter(state, OriginalEffect);
@@ -928,7 +971,7 @@ public sealed class NestedUpscaleSession : IDisposable
                 else
                 {
                     state.Host.SetFullscreen(false);
-                    ApplyHostRestoreSize(state);
+                    ApplyHostRestoreSize(state, immediate: true);
                 }
             }
 
@@ -1006,6 +1049,88 @@ public sealed class NestedUpscaleSession : IDisposable
         ulong transientFor = parent?.Host is NestedHostWindow x11Parent ? x11Parent.Window : 0;
         return new NestedHostWindow(_monitorName, title, width, height,
             startFullscreen: fullscreen, transientFor: transientFor, dialog: dialog);
+    }
+
+    /// <summary>
+    /// Subscribe the session to one host window. Called for the initial window
+    /// and again whenever a Wayland host is recreated at a new size.
+    /// </summary>
+    private void WireHost(WindowState state)
+    {
+        if (state.Host is null) return;
+        state.Host.Pointer += e => OnPointer(state, e);
+        state.Host.Key += e => OnKey(state, e);
+        state.Host.Modifiers += m =>
+        {
+            _modifiers = m;
+            _input?.HandleModifiers(m);
+        };
+        state.Host.FocusChanged += focused => OnHostFocusChanged(state, focused);
+        state.Host.Closed += () => state.CloseRequested = true;
+        state.Host.CloseRequested += () => state.CloseRequested = true;
+
+        // The host draws through a Vulkan swapchain, which has no retained
+        // front buffer. If the compositor discards our window contents
+        // (occluded, newly mapped) and the game frame is static, the dirty
+        // diff would skip presenting and the host would stay black. An
+        // Expose must always force one fresh present.
+        state.Host.Exposed += () => state.ForceRender = true;
+        state.Host.Restored += () => RestoreMinimizedWindow(state);
+    }
+
+    /// <summary>
+    /// Replace a Wayland host window with a new one at <paramref name="width"/>
+    /// x <paramref name="height"/>. xdg_toplevel has no client-side resize
+    /// request (set_min_size/set_max_size only constrain later compositor
+    /// decisions), so following a game that changed its window size means a new
+    /// toplevel. Games resize rarely; the brief window flash is the price for a
+    /// correct size and no letterboxing.
+    /// </summary>
+    private void RebuildHost(WindowState state, int width, int height)
+    {
+        if (state.Host is null || state.Host.CanResize) return;
+        state.ResizeTarget = null;
+        if (width < 64 || height < 64) return;
+
+        string title = state.LastTitle ?? WindowTitle(state.Info);
+        WindowState? parent = null;
+        if (state.IsDialog && state.ParentId is long parentId &&
+            _states.TryGetValue(parentId, out var parentState) && parentState.Host is not null)
+            parent = parentState;
+
+        int oldWidth = state.Host.Width;
+        int oldHeight = state.Host.Height;
+        bool wasFocused = state.Id == _focusedId;
+        try
+        {
+            try { state.Blitter?.Dispose(); }
+            catch (Exception ex) { Log.Warn($"nested host recreate blitter dispose: {ex.Message}"); }
+            state.Blitter = null;
+            try { state.Host.Dispose(); }
+            catch (Exception ex) { Log.Warn($"nested host recreate dispose: {ex.Message}"); }
+
+            state.Host = CreateHostWindow(title, width, height, fullscreen: false, parent,
+                state.IsDialog);
+            WireHost(state);
+            state.Blitter = state.Host.CreateBlitter(state.Upscale ? _effect : OriginalEffect,
+                state.Capture?.SourceIsRgb ?? true);
+            state.LastHostWidth = state.Host.Width;
+            state.LastHostHeight = state.Host.Height;
+            state.Diff.Reset();
+            state.ForceRender = true;
+            if (wasFocused) state.Host.Show();
+            UpdateDest(state);
+            Emit($"nested host recreated for '{DescribeWindow(state.Info)}' " +
+                 $"{oldWidth}x{oldHeight} -> {state.Host.Width}x{state.Host.Height} " +
+                 "(wayland toplevel cannot be resized)");
+        }
+        catch (Exception ex)
+        {
+            Emit($"nested host recreate failed for '{DescribeWindow(state.Info)}': " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+            state.Ignored = true;
+            DisposeStateResources(state);
+        }
     }
 
     private void ExitAllUpscale()
@@ -1241,6 +1366,22 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void ProcessPendingRequests()
     {
+        // A Wayland host is rebuilt only after the requested size has been
+        // stable for a moment, so an animated game resize does not spawn a
+        // window per intermediate step.
+        long nowTick = Environment.TickCount64;
+        foreach (var state in _states.Values.ToList())
+        {
+            if (state.ResizeTarget is not { } target) continue;
+            if (state.Ignored || state.Upscale || state.LastGameFullscreen || state.Minimized)
+            {
+                state.ResizeTarget = null;
+                continue;
+            }
+            if (nowTick - state.ResizeTargetAt < HostResizeDebounceMs) continue;
+            RebuildHost(state, target.Width, target.Height);
+        }
+
         int toggle = Interlocked.Exchange(ref _toggleRequested, 0);
         if (toggle != 0)
         {
@@ -1339,8 +1480,19 @@ public sealed class NestedUpscaleSession : IDisposable
             state.ForceRender = true;
         }
 
-        if (!state.Capture.TryCapture(out NestedFrame frame))
-            return false;
+        NestedFrame frame;
+        if (!state.Capture.TryCapture(out frame))
+        {
+            // A freshly created host window has no buffer yet, so KWin does not
+            // map it and the game window seems to vanish. Re-present the last
+            // captured frame into it instead of waiting for the client to
+            // repaint (which may never happen for a static game).
+            // Use the dimensions of the last *converted* frame: the capture's
+            // current Width/Height change as soon as new buffer constraints
+            // arrive, before a frame of that size exists.
+            if (!state.ForceRender || !state.Capture.TryGetLastFrame(out frame))
+                return false;
+        }
 
         ReadOnlySpan<byte> pixels;
         int cropStride;
@@ -1411,7 +1563,10 @@ public sealed class NestedUpscaleSession : IDisposable
         catch (Exception ex)
         {
             Emit($"nested present error for '{DescribeWindow(state.Info)}': " +
-                 $"{ex.GetType().Name}: {ex.Message}");
+                 $"{ex.GetType().Name}: {ex.Message} " +
+                 $"source={state.SourceWidth}x{state.SourceHeight} " +
+                 $"capture={state.Capture?.Width}x{state.Capture?.Height} " +
+                 $"stride={state.Capture?.Stride}");
             state.Ignored = true;
             DisposeStateResources(state);
             return false;
@@ -1682,6 +1837,11 @@ public sealed class NestedUpscaleSession : IDisposable
         /// instead of waiting for the missing-window grace period.
         /// </summary>
         public bool CloseForwarded { get; set; }
+        /// <summary>Host window that owns this dialog, for re-parenting on rebuild.</summary>
+        public long? ParentId { get; set; }
+        /// <summary>Size a Wayland host is waiting to be rebuilt at.</summary>
+        public (int Width, int Height)? ResizeTarget { get; set; }
+        public long ResizeTargetAt { get; set; }
         public bool ForceRender { get; set; }
         public bool CloseRequested { get; set; }
         public bool PendingOriginal { get; set; }

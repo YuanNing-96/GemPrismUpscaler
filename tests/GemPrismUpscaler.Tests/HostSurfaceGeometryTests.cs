@@ -30,6 +30,14 @@ public class HostSurfaceGeometryTests
     public void ToPixels_MultipliesByScale(int logical, double scale, int expected)
         => Assert.Equal(expected, HostSurfaceGeometry.ToPixels(logical, scale));
 
+    [Fact]
+    public void HalfwayValues_RoundAwayFromZero()
+    {
+        // 131 logical * 1.5 = 196.5: a 197 pixel game window must stay 197.
+        Assert.Equal(197, HostSurfaceGeometry.ToPixels(131, 1.5));
+        Assert.Equal(131, HostSurfaceGeometry.ToLogical(197, 1.5));
+    }
+
     [Theory]
     [InlineData(1.5)]
     [InlineData(1.25)]

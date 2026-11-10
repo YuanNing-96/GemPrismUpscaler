@@ -33,6 +33,12 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   motion 的缓冲像素坐标。
 - **超分切换后窗口尺寸错误**：全屏 configure 的逻辑尺寸 × scale 现在直接得到物理分辨率，
   不再出现 4K 显示器上退出超分后窗口变成 4K 大小、带黑边。
+- **游戏改窗口大小时重建宿主窗口**：xdg_toplevel 没有客户端主动 resize 的请求，`set_min_size`/
+  `set_max_size` 实测不会改变已有窗口尺寸。现在 toplevel 模式会跟踪游戏窗口 rect，尺寸稳定
+  （350ms 防抖）后销毁旧宿主、按新尺寸重建一个，对话框的 `set_parent`/焦点/标题都会带上；
+  X11 宿主仍原地 resize。重建后会把上一帧重新呈现一次，新窗口立刻映射、不会黑屏。
+  （顺带修掉两处：抓帧把“最后一次成功转换的帧尺寸”和当前 buffer 约束混用导致的
+  `frame buffer too small`；窗口关闭后 `Stopped`/`BufferConstraints` 的日志刷屏。）
 - **关闭宿主窗口改为转发给游戏窗口**：以前点 KDE 标题栏的关闭按钮会结束整个会话（`--nested`
   模式还会杀掉游戏进程树），于是“关掉退出确认弹窗”变成了“关掉游戏”。现在把关闭请求转发给嵌套
   合成器里对应的那个窗口（sway `kill` → `xdg_toplevel.close` / `WM_DELETE_WINDOW`），和 KDE 直连
