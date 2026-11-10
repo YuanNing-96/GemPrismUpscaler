@@ -150,64 +150,14 @@ public sealed unsafe class VulkanBlitter : IDisposable
     {
         _vk = Vk.GetApi();
 
-        var appName = Marshal.StringToHGlobalAnsi("GemPrismUpscaler");
-        var engineName = Marshal.StringToHGlobalAnsi("GemPrism");
-        try
-        {
-            var app = new ApplicationInfo
-            {
-                SType = StructureType.ApplicationInfo,
-                PApplicationName = (byte*)appName,
-                ApplicationVersion = 1,
-                PEngineName = (byte*)engineName,
-                EngineVersion = 1,
-                ApiVersion = Vk.MakeVersion(1, 2, 0)
-            };
-
-            var extensions = _isWayland
-                ? new[] { "VK_KHR_surface", "VK_KHR_wayland_surface" }
-                : new[] { "VK_KHR_surface", "VK_KHR_xlib_surface" };
-            var extPtrs = extensions.Select(Marshal.StringToHGlobalAnsi).ToArray();
-            bool enableValidation = DiagnosticsRuntime.ValidationLayerEnabled;
-            var layers = enableValidation ? new[] { "VK_LAYER_KHRONOS_validation" } : Array.Empty<string>();
-            var layerPtrs = layers.Select(Marshal.StringToHGlobalAnsi).ToArray();
-            var ep = GCHandle.Alloc(extPtrs, GCHandleType.Pinned);
-            var lp = GCHandle.Alloc(layerPtrs, GCHandleType.Pinned);
-            try
-            {
-                var ci = new InstanceCreateInfo
-                {
-                    SType = StructureType.InstanceCreateInfo,
-                    PApplicationInfo = &app,
-                    EnabledExtensionCount = (uint)extPtrs.Length,
-                    PpEnabledExtensionNames = (byte**)ep.AddrOfPinnedObject(),
-                    EnabledLayerCount = (uint)layerPtrs.Length,
-                    PpEnabledLayerNames = layerPtrs.Length == 0 ? null : (byte**)lp.AddrOfPinnedObject()
-                };
-
-                Result r = _vk.CreateInstance(&ci, null, out _instance);
-                if (r != Result.Success && enableValidation)
-                {
-                    Log.Warn("Vulkan 校验层不可用，回退为无校验层创建实例");
-                    ci.EnabledLayerCount = 0;
-                    ci.PpEnabledLayerNames = null;
-                    r = _vk.CreateInstance(&ci, null, out _instance);
-                }
-                if (r != Result.Success) throw new InvalidOperationException($"vkCreateInstance failed: {r}");
-            }
-            finally
-            {
-                ep.Free();
-                lp.Free();
-                foreach (var p in layerPtrs) Marshal.FreeHGlobal(p);
-                foreach (var p in extPtrs) Marshal.FreeHGlobal(p);
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(appName);
-            Marshal.FreeHGlobal(engineName);
-        }
+        // Every presenter in the process shares one VkInstance. Destroying a
+        // per-window instance while another window keeps presenting corrupts
+        // the NVIDIA Wayland WSI (null call inside libnvidia-glcore), so the
+        // instance is process-wide and must outlive all blitters.
+        var extensions = _isWayland
+            ? new[] { "VK_KHR_surface", "VK_KHR_wayland_surface" }
+            : new[] { "VK_KHR_surface", "VK_KHR_xlib_surface" };
+        _instance = VulkanInstanceCache.Get(_vk, extensions);
 
         if (!_vk.TryGetInstanceExtension(_instance, out _surfaceExt, null))
             throw new InvalidOperationException("VK_KHR_surface unavailable");
@@ -1176,10 +1126,13 @@ public sealed unsafe class VulkanBlitter : IDisposable
             if (_imageAvailable.Handle != 0) _vk.DestroySemaphore(_device, _imageAvailable, null);
             foreach (var s in _renderSemaphores) if (s.Handle != 0) _vk.DestroySemaphore(_device, s, null);
             foreach (var v in _swapchainViews) if (v.Handle != 0) _vk.DestroyImageView(_device, v, null);
-            if (_swapchain.Handle != 0) _swapchainExt.DestroySwapchain(_device, _swapchain, null);
+            if (_swapchain.Handle != 0)
+                _swapchainExt.DestroySwapchain(_device, _swapchain, null);
             _vk.DestroyDevice(_device, null);
         }
-        if (_surface.Handle != 0) _surfaceExt.DestroySurface(_instance, _surface, null);
-        if (_instance.Handle != 0) _vk.DestroyInstance(_instance, null);
+        if (_surface.Handle != 0)
+            _surfaceExt.DestroySurface(_instance, _surface, null);
+        // The VkInstance belongs to VulkanInstanceCache and outlives every
+        // blitter: see CreateInstance for why it must not be destroyed here.
     }
 }

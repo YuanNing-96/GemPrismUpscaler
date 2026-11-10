@@ -33,6 +33,11 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   motion 的缓冲像素坐标。
 - **超分切换后窗口尺寸错误**：全屏 configure 的逻辑尺寸 × scale 现在直接得到物理分辨率，
   不再出现 4K 显示器上退出超分后窗口变成 4K 大小、带黑边。
+- **关闭对话框时 SIGSEGV（NVIDIA Wayland WSI）**：每个宿主窗口原本各自创建并销毁
+  `VkInstance`；关闭对话框窗口销毁 instance 时，驱动里另一窗口仍在用的状态被一并拆掉，
+  主窗口下一次 present 跳空指针崩溃（`ip=0`，栈在 `libnvidia-glcore`）。现在按平台扩展集
+  共享一个进程级 `VkInstance`（`VulkanInstanceCache`），窗口仍各自拥有 device/swapchain/
+  surface。分析与复现见 `.agent/M2b-修复-SIGSEGV-关闭对话框.md`。
 - **移除每秒强制绝对定位**：那是“光标不会跳”时期的兜底，会让嵌套指针每秒被拉回宿主演算
   位置、与 sway 刚回报的 warp 参考点互相拉扯。现在只保留 sway hint 触发的参考点重设，
   以及点击/进入时的一次绝对定位。归档见 `.agent/M2b-归档-指针周期绝对刷新.md`。
