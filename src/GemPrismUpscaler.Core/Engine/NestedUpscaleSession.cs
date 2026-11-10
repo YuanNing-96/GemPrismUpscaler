@@ -37,6 +37,15 @@ public sealed class NestedUpscaleSession : IDisposable
     private static readonly bool TraceInput =
         Environment.GetEnvironmentVariable("GEMPRISM_TRACE_INPUT") == "1";
 
+    /// <summary>
+    /// Diagnostic only: log a coarse fingerprint (mean luminance, uniform-dark
+    /// share, signature) of every frame that is about to be presented. It tells
+    /// "we presented a black frame" apart from "the compositor did something to
+    /// the window".
+    /// </summary>
+    private static readonly bool TraceFrames =
+        Environment.GetEnvironmentVariable("GEMPRISM_TRACE_FRAMES") == "1";
+
     private readonly NestedSession _session;
     private readonly ScalingMode _mode;
     private readonly EffectDefinition _effect;
@@ -523,7 +532,53 @@ public sealed class NestedUpscaleSession : IDisposable
         }
 
         UpdateStateGeometry(state);
+        // sway destroys the toplevel and creates a new one for the same X11
+        // window (unmap/map, e.g. when the game is deiconified), so the capture
+        // source of the old view is dead. Without a new capture the host keeps
+        // presenting the last frame while the game is already painting again.
+        RecreateCapture(state);
         state.ForceRender = true;
+    }
+
+    private void RecreateCapture(WindowState state)
+    {
+        if (!_toplevelMode || state.Capture is null) return;
+        // The new toplevel may not have committed a buffer yet when the view is
+        // reported; the session would then be stuck at 1x1. Retry briefly until
+        // the capture reports the client's real size.
+        long deadline = Environment.TickCount64 + 1000;
+        ToplevelCapture? capture = null;
+        try
+        {
+            while (true)
+            {
+                capture = new ToplevelCapture(_session.WaylandDisplay!,
+                    state.Info.AppId, state.Info.Name);
+                if (capture.Width > 1 && capture.Height > 1) break;
+                if (Environment.TickCount64 >= deadline) break;
+                capture.Dispose();
+                capture = null;
+                Thread.Sleep(50);
+            }
+            if (capture is null)
+                throw new InvalidOperationException("toplevel has no buffer yet");
+        }
+        catch (Exception ex)
+        {
+            capture?.Dispose();
+            Emit($"nested capture re-create failed for '{DescribeWindow(state.Info)}': " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+            return;
+        }
+
+        var old = state.Capture;
+        state.Capture = capture;
+        state.SourceWidth = capture.Width;
+        state.SourceHeight = capture.Height;
+        state.Diff.Reset();
+        try { old?.Dispose(); } catch { }
+        Emit($"nested capture re-created for '{DescribeWindow(state.Info)}' " +
+             $"{capture.Width}x{capture.Height}");
     }
 
     private bool AddWindow(NestedWindowInfo window)
@@ -1166,21 +1221,33 @@ public sealed class NestedUpscaleSession : IDisposable
     }
 
     /// <summary>
-    /// Mirror a game-side minimize onto the KDE host. wlroots marks the X11
-    /// window iconic but keeps its surface on the output, so without this the
-    /// host would keep showing the last (black) frame the client rendered
-    /// before it stopped painting.
+    /// Mirror a game-side minimize onto the KDE host. Wine asks the window
+    /// manager to iconify the window with <c>WM_CHANGE_STATE(IconicState)</c>;
+    /// KWin honors that request, but the nested sway has no minimize concept
+    /// and ignores it, so the window stays on the headless output, the client
+    /// stops painting and the host would keep showing the last (black) frame it
+    /// rendered. Mirror the request on the host instead, and let the host's
+    /// taskbar restore drive the game back (see <see cref="RestoreMinimizedWindow"/>).
     /// </summary>
     private void SyncMinimizedStates()
     {
         if (_probe is null) return;
+
+        // Minimize requests arrive as X11 events; draining them is cheap, so do
+        // it on every loop iteration to win the race against the black frame
+        // the client paints while it hides itself.
+        while (_probe.TryTakeMinimizeRequest(out ulong xid))
+            MirrorMinimizeRequest(xid);
+
+        // Secondary trigger: clients (or a real WM) that set WM_STATE=IconicState
+        // themselves. Polled rarely because the property read costs a round trip.
         long now = Environment.TickCount64;
         if (now - _lastMinimizePoll < MinimizePollMs) return;
         _lastMinimizePoll = now;
 
         foreach (var state in _states.Values.ToList())
         {
-            if (state.Ignored || state.Info.X11Window == 0) continue;
+            if (state.Ignored || state.Info.X11Window == 0 || state.Minimized) continue;
             bool iconic;
             try
             {
@@ -1192,23 +1259,28 @@ public sealed class NestedUpscaleSession : IDisposable
                      $"{ex.GetType().Name}: {ex.Message}");
                 continue;
             }
-            if (iconic == state.Minimized) continue;
-
-            if (iconic)
-            {
-                state.Minimized = true;
-                state.Host?.Iconify();
-                Emit($"nested window '{DescribeWindow(state.Info)}' minimized; " +
-                     "mirroring minimize on host");
-            }
-            else
-            {
-                state.Minimized = false;
-                state.Host?.RestoreFromIconify();
-                state.ForceRender = true;
-                Emit($"nested window '{DescribeWindow(state.Info)}' restored; resuming host");
-            }
+            if (iconic) MirrorMinimize(state);
         }
+    }
+
+    private void MirrorMinimizeRequest(ulong xid)
+    {
+        foreach (var state in _states.Values.ToList())
+        {
+            if (state.Ignored || state.Info.X11Window != xid || state.Minimized) continue;
+            MirrorMinimize(state);
+        }
+    }
+
+    private void MirrorMinimize(WindowState state)
+    {
+        // Without a host there is nothing to minimize, and nothing would ever
+        // restore the state: keep rendering instead.
+        if (state.Host is null) return;
+        state.Minimized = true;
+        state.Host.Iconify();
+        Emit($"nested window '{DescribeWindow(state.Info)}' asked to minimize; " +
+             "minimizing host (restore it from the taskbar to bring the game back)");
     }
 
     /// <summary>
@@ -1221,6 +1293,10 @@ public sealed class NestedUpscaleSession : IDisposable
         if (!state.Minimized) return;
         state.Minimized = false;
         state.ForceRender = true;
+        // Deiconify unmaps and maps the window, which destroys and re-creates
+        // its toplevel: the capture of the dying surface returns one black
+        // frame, so hold black frames for a moment until the client repaints.
+        state.SuppressBlackUntil = Environment.TickCount64 + 500;
         if (state.Info.X11Window == 0 || _probe is null) return;
         Emit($"nested host restored; deiconifying '{DescribeWindow(state.Info)}'");
         try
@@ -1481,6 +1557,7 @@ public sealed class NestedUpscaleSession : IDisposable
         }
 
         NestedFrame frame;
+        bool reusedLastFrame = false;
         if (!state.Capture.TryCapture(out frame))
         {
             // A freshly created host window has no buffer yet, so KWin does not
@@ -1492,6 +1569,7 @@ public sealed class NestedUpscaleSession : IDisposable
             // arrive, before a frame of that size exists.
             if (!state.ForceRender || !state.Capture.TryGetLastFrame(out frame))
                 return false;
+            reusedLastFrame = true;
         }
 
         ReadOnlySpan<byte> pixels;
@@ -1532,6 +1610,21 @@ public sealed class NestedUpscaleSession : IDisposable
                 dest, state.Blitter.DirtyHalo + 2)
             : DirtyFrame.Full;
         if (!state.ForceRender && dirty.IsStatic) return false;
+
+        if (TraceFrames)
+            TraceFrame(state, pixels, cropStride, frame, dest, reusedLastFrame);
+
+        if (state.SuppressBlackUntil != 0 &&
+            Environment.TickCount64 < state.SuppressBlackUntil &&
+            IsUniformlyBlack(pixels, state.SourceWidth, state.SourceHeight, cropStride))
+        {
+            // Keep the last good frame instead of a torn-down surface's copy.
+            state.ForceRender = false;
+            Emit($"nested black frame suppressed after restore for " +
+                 $"'{DescribeWindow(state.Info)}'");
+            return false;
+        }
+        state.SuppressBlackUntil = 0;
 
         state.ForceRender = false;
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -1588,6 +1681,64 @@ public sealed class NestedUpscaleSession : IDisposable
             state.Blitter.LastGpuUploadMs, state.Blitter.LastGpuEffectMs,
             state.Blitter.LastGpuTailMs, state.Blitter.LastGpuTimingsValid));
         return true;
+    }
+
+    /// <summary>
+    /// Diagnostic aid for the "host flashes black for a moment" reports: sample
+    /// a grid over the frame that is about to be presented and log a fingerprint
+    /// so the log shows whether the app itself presented a black frame.
+    /// </summary>
+    private void TraceFrame(WindowState state, ReadOnlySpan<byte> pixels, int stride,
+        in NestedFrame frame, in RectI dest, bool reused)
+    {
+        int w = state.SourceWidth, h = state.SourceHeight;
+        if (w <= 0 || h <= 0 || stride < w * 4 || pixels.Length < (long)stride * h) return;
+        int stepX = Math.Max(1, w / 64), stepY = Math.Max(1, h / 36);
+        long sum = 0;
+        int samples = 0, dark = 0;
+        uint sig = 2166136261;
+        for (int y = 0; y < h; y += stepY)
+        {
+            for (int x = 0; x < w; x += stepX)
+            {
+                int o = y * stride + x * 4;
+                int lum = (pixels[o] * 11 + pixels[o + 1] * 59 + pixels[o + 2] * 30) / 100;
+                sum += lum;
+                if (lum < 8) dark++;
+                sig = (sig ^ (uint)lum) * 16777619;
+                samples++;
+            }
+        }
+        Emit($"frame-trace id={state.Id} seq={frame.Sequence} {w}x{h} dest={dest.Width}x{dest.Height} " +
+             $"mean={(samples > 0 ? sum / samples : 0)} dark%={(samples > 0 ? dark * 100 / samples : 0)} " +
+             $"sig={sig:x8} reused={reused}");
+    }
+
+    /// <summary>
+    /// True for frames that are effectively one solid black colour (a cleared
+    /// or torn-down surface), which is never real game content.
+    /// </summary>
+    private static bool IsUniformlyBlack(ReadOnlySpan<byte> pixels, int width, int height,
+        int stride)
+    {
+        if (width <= 0 || height <= 0 || stride < width * 4 ||
+            pixels.Length < (long)stride * height)
+            return false;
+        int stepX = Math.Max(1, width / 64), stepY = Math.Max(1, height / 36);
+        long sum = 0;
+        int samples = 0, dark = 0;
+        for (int y = 0; y < height; y += stepY)
+        {
+            for (int x = 0; x < width; x += stepX)
+            {
+                int o = y * stride + x * 4;
+                int lum = (pixels[o] * 11 + pixels[o + 1] * 59 + pixels[o + 2] * 30) / 100;
+                sum += lum;
+                samples++;
+                if (lum < 8) dark++;
+            }
+        }
+        return samples > 0 && dark * 100 >= samples * 95 && sum <= samples * 3;
     }
 
     /// <summary>
@@ -1846,6 +1997,14 @@ public sealed class NestedUpscaleSession : IDisposable
         public bool CloseRequested { get; set; }
         public bool PendingOriginal { get; set; }
         public bool Ignored { get; set; }
+        /// <summary>
+        /// While non-zero and in the future, uniformly black frames are not
+        /// presented. Deiconifying a window re-creates its toplevel, and the
+        /// capture of the dying surface delivers one black frame before the
+        /// client repaints; presenting it would flash the host black right
+        /// after it comes back from the taskbar.
+        /// </summary>
+        public long SuppressBlackUntil { get; set; }
         public long MissingSince { get; set; }
         public bool LastGameFullscreen { get; set; }
         public int LastHostWidth { get; set; }

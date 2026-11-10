@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
@@ -6,28 +7,78 @@ namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 
 /// <summary>
 /// Reads and changes the ICCCM <c>WM_STATE</c> of a window on the nested
-/// XWayland server.
+/// XWayland server, and listens for the window manager's minimize request.
 ///
 /// A game may minimize one of its own windows (the Endfield launcher does this
-/// as soon as the game starts). wlroots/sway sets <c>WM_STATE=IconicState</c>
-/// but keeps the surface mapped on the output; the client therefore stops
-/// painting while the output still contains the (now stale, usually black)
-/// window. sway has no minimize concept we can mirror from its tree, so this
-/// probe is the only way to tell "minimized" from "still rendering".
+/// as soon as the game starts, 秽翼 does it on Esc). ICCCM says a client asks
+/// for that by sending a <c>WM_CHANGE_STATE</c> ClientMessage with
+/// <c>IconicState</c> to the root window, which is exactly what Wine does
+/// (verified with an X11 event listener on the nested display). sway has no
+/// minimize concept and ignores the request, so no <c>WM_STATE=IconicState</c>
+/// is ever set here and the client keeps the window mapped while it stops
+/// painting. Watching the ClientMessage is therefore the only reliable
+/// "the game asked to be minimized" signal inside the nested session; the
+/// WM_STATE accessors remain for deiconify and for clients that set the
+/// property themselves.
 /// </summary>
 internal sealed class NestedWindowProbe : IDisposable
 {
     private const int NormalState = 1;
     private const int IconicState = 3;
+    private const int ClientMessageType = 33;
 
     private readonly X11Display _display;
     private readonly ulong _wmStateAtom;
+    private readonly ulong _changeStateAtom;
+    private readonly List<ulong> _minimizeRequests = new();
     private bool _disposed;
 
     public NestedWindowProbe(string displayName)
     {
         _display = new X11Display(displayName);
         _wmStateAtom = X11Native.XInternAtom(_display.Handle, "WM_STATE", 0);
+        _changeStateAtom = X11Native.XInternAtom(_display.Handle, "WM_CHANGE_STATE", 0);
+        // XIconifyWindow sends the message with SubstructureNotifyMask, so
+        // listening for substructure notifications is enough to get a copy.
+        // Selecting SubstructureRedirectMask instead would steal the request
+        // from sway, which stays the real window manager here.
+        X11Native.XSelectInput(_display.Handle, _display.Root,
+            X11Native.SubstructureNotifyMask);
+        _display.Flush();
+        DrainEvents();
+    }
+
+    /// <summary>
+    /// Takes the next queued <c>WM_CHANGE_STATE(IconicState)</c> request, or
+    /// returns false when no client asked to be minimized since the last call.
+    /// </summary>
+    public bool TryTakeMinimizeRequest(out ulong xid)
+    {
+        DrainEvents();
+        if (_minimizeRequests.Count == 0)
+        {
+            xid = 0;
+            return false;
+        }
+        xid = _minimizeRequests[0];
+        _minimizeRequests.RemoveAt(0);
+        return true;
+    }
+
+    private void DrainEvents()
+    {
+        if (_disposed || _display.Handle == IntPtr.Zero) return;
+        while (X11Native.XPending(_display.Handle) > 0)
+        {
+            X11Native.XEvent ev = default;
+            X11Native.XNextEvent(_display.Handle, ref ev);
+            if (ev.Type != ClientMessageType) continue;
+            ref var cm = ref Unsafe.As<X11Native.XEvent, X11Native.XClientMessageEvent>(ref ev);
+            if (cm.MessageType != _changeStateAtom || cm.Format != 32) continue;
+            if (cm.Data0 != IconicState) continue;
+            if (!_minimizeRequests.Contains(cm.Window))
+                _minimizeRequests.Add(cm.Window);
+        }
     }
 
     public bool IsIconified(ulong xid) => ReadState(xid) == IconicState;

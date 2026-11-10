@@ -118,14 +118,16 @@ public sealed class ToplevelCapture : INestedFrameSource
         _display.Roundtrip();
         _display.Roundtrip();
 
-        for (int i = 0; i < handles.Count; i++)
+        // A re-created toplevel can coexist with the old handle for a moment
+        // (same app_id/title), and the old one no longer has a surface. Prefer
+        // the most recently announced, still-open handle so we attach to the
+        // live view instead of the dying one.
+        for (int i = handles.Count - 1; i >= 0; i--)
         {
             var listener = handleListeners[i];
-            if (Matches(listener))
-            {
-                _handle = handles[i];
-                break;
-            }
+            if (listener.IsClosed || !Matches(listener)) continue;
+            _handle = handles[i];
+            break;
         }
         if (_handle is null)
             throw new InvalidOperationException(
