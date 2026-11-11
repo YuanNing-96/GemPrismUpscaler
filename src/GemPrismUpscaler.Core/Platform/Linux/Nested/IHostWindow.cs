@@ -79,6 +79,13 @@ public interface IHostWindow : IDisposable
     /// </summary>
     bool WarpPointer(int x, int y);
 
+    /// <summary>
+    /// Forward the game's cursor shape name (wp_cursor_shape_v1 naming) to the
+    /// compositor. Empty means the game used an image cursor; the backend
+    /// falls back to the theme default.
+    /// </summary>
+    void SetCursorShape(string shape);
+
     /// <summary>Create the presenter for this window's current size.</summary>
     VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb);
 

@@ -68,6 +68,12 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   拉伸铺满、过一会儿才归位”）。Wayland 宿主可以给 `wl_surface` 挂任意尺寸的 buffer，
   `wp_viewport` 负责映射到当前窗口；X11 宿主受窗口 extent 限制，仍走 configure 后重建。
   游戏自己改变窗口尺寸的路径不做特殊处理（保持原逻辑，记为已知的可能问题）。
+- **光标形状 / X11 光标跳转 / 宿主窗口按钮（G5 A）**：sway 补丁把
+  `wp_cursor_shape_v1` 的形状名暴露到 `get_seats.cursor_shape`，Wayland 宿主用
+  `wp_cursor_shape_manager_v1` 显示 KDE 原生光标；X11 游戏的光标跳转改为轮询嵌套
+  XWayland 的 `XQueryPointer`（Wine 的 `XWarpPointer` 不产生 locked-pointer hint）；
+  宿主窗口窗口化时固定为游戏窗口大小（min=max），KWin 隐藏最大化按钮并禁止拖拽缩放，
+  只保留最小化和关闭。详见 [cursor.md](cursor.md)。
 
 ### 验证
 
@@ -78,6 +84,9 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - G4 A 冒烟（zenity 300×226）：`mode prepared 3840x2160` → `mode=upscale`；再
   `mode prepared 300x226` → `reconfigured logical=200x151 buffer=300x227 fullscreen=False`
   → `mode=original`；两次都没有 swapchain 错误，全屏/还原后的截图正常，无拉伸帧。
+- G5 冒烟（zenity）：`get_seats.cursor_shape` 返回 `default`；Wine 探针悬停按钮时变成空串
+  （图像光标）；KWin 报 `resizeable=false / maximizable=false`，标题栏只剩最小化/关闭，
+  拖拽和最大化均不可用。
 - 实机游戏（秽翼的尤斯蒂娅，Proton/Wine Wayland）：界面显示、悬停、点击、光标跳转、
   超分进出全部正常；一次退出确认框记录 25 次 warp。
 - `GEMPRISM_HOST_X11=1` 冒烟：旧 X11 宿主窗口仍可创建并呈现。
@@ -92,6 +101,9 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - **游戏内全屏（腐姬）**：X11 全屏黑屏（游戏画在 override-redirect 窗口上，toplevel 抓取看不到）；
   Wayland 全屏画面居左、点击错位（KDE 直连同样异常）。v1.0 不解决，根因与备选方案见
   [`fullscreen.md`](fullscreen.md)。
+- **图像光标**：Wine 用 `wl_pointer.set_cursor` 的图像，不实现 `wp_cursor_shape_v1` 的命名形状；
+  v1.0 只转发命名形状，游戏自定义光标（含“手”）仍显示默认箭头。图像转发方案见
+  [`cursor.md`](cursor.md)，列为 v1.0 后优化。
 
 ## v0.4.0（2026-11-07）· M2a：Wayland layer-shell、XWayland 混合与 portal 捕获
 

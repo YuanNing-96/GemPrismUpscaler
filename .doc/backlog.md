@@ -58,6 +58,13 @@ M2 已拆成 M2a / M2b / M2c，详细计划见 [m2-plan.md](m2-plan.md)。
 - **自定义 effect 的 graphics 最终 pass**：当前只支持 compute + 内置 Lanczos-2；留后续。
 - **4K 源（2×→8K）**：脏矩形/显存/带宽仍需专门评估。
 
+## 4.1 v1.0 之后优化项（2026-11-12）
+
+- **图像光标转发（G5 方案 B）**：当前只转发 `wp_cursor_shape_v1` 的命名形状；Wine 用图像光标，
+  所以按钮上仍是箭头。完整方案（sway 快照光标 surface + 宿主 `wl_pointer.set_cursor`）见
+  [cursor.md](cursor.md)。
+- **宿主窗口图标**：KDE 标题栏/任务栏目前是默认图标，接入自己的图标留到 v1.0 之后。
+
 ## 5. 需要更多需求才做
 
 - FSR1 EASU + RCAS、NIS、Lanczos-3、Bicubic。

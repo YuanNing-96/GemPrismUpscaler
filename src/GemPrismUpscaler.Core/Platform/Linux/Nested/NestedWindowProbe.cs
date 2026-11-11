@@ -49,6 +49,23 @@ internal sealed class NestedWindowProbe : IDisposable
     }
 
     /// <summary>
+    /// Read the nested XWayland pointer position. Wine's X11 driver moves its
+    /// internal pointer with XWarpPointer for dialogs; this does not produce a
+    /// locked-pointer hint, so the session polls this instead.
+    /// </summary>
+    public bool TryGetPointerPosition(out int x, out int y)
+    {
+        if (X11Native.XQueryPointer(_display.Handle, _display.Root, out _, out _,
+                out x, out y, out _, out _, out _) == 0)
+        {
+            x = 0;
+            y = 0;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Takes the next queued <c>WM_CHANGE_STATE(IconicState)</c> request, or
     /// returns false when no client asked to be minimized since the last call.
     /// </summary>

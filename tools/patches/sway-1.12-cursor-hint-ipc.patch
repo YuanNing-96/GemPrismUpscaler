@@ -30,10 +30,10 @@ index fc0f11f..e2539f0 100644
  		// Warp the pointer as well, so that on the next pointer rebase we don't
  		// send an unexpected synthetic motion event to clients.
 diff --git a/sway/ipc-json.c b/sway/ipc-json.c
-index 3b69ad3..ffe4f4d 100644
+index 3b69ad3..a6cb4b2 100644
 --- a/sway/ipc-json.c
 +++ b/sway/ipc-json.c
-@@ -1227,6 +1227,12 @@ json_object *ipc_json_describe_seat(struct sway_seat *seat) {
+@@ -1227,6 +1227,16 @@ json_object *ipc_json_describe_seat(struct sway_seat *seat) {
  		json_object_new_int(seat->wlr_seat->capabilities));
  	json_object_object_add(object, "focus",
  		json_object_new_int(focus ? focus->id : 0));
@@ -43,6 +43,10 @@ index 3b69ad3..ffe4f4d 100644
 +		json_object_new_double(seat->cursor->hint_warp_x));
 +	json_object_object_add(object, "cursor_hint_y",
 +		json_object_new_double(seat->cursor->hint_warp_y));
++	// Cursor shape name as reported by wp_cursor_shape_v1 (or sway's own
++	// "default"). Empty when the client supplied an image cursor instead.
++	json_object_object_add(object, "cursor_shape",
++		json_object_new_string(seat->cursor->image ? seat->cursor->image : ""));
  
  	json_object *devices = json_object_new_array();
  	struct sway_seat_device *device = NULL;

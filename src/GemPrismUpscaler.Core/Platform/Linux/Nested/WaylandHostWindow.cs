@@ -4,6 +4,7 @@ using GemPrismUpscaler.Core.Platform.Linux;
 using GemPrismUpscaler.Core.Rendering;
 using Microsoft.Win32.SafeHandles;
 using NWayland;
+using NWayland.Protocols.CursorShapeV1;
 using NWayland.Protocols.FractionalScaleV1;
 using NWayland.Protocols.PointerWarpV1;
 using NWayland.Protocols.Viewporter;
@@ -99,6 +100,13 @@ public sealed class WaylandHostWindow : IHostWindow
     private int _warpY;
     private long _lastWarpWarnAt;
 
+    private WpCursorShapeManagerV1? _cursorShapeManager;
+    private WpCursorShapeDeviceV1? _cursorShapeDevice;
+    private readonly object _cursorShapeGate = new();
+    private string _cursorShape = "default";
+    private string _pendingCursorShape = "default";
+    private bool _cursorShapePending;
+
     private bool _pendingFullscreen;
     private bool _pendingActivated;
     private int _pendingWidth;
@@ -167,6 +175,7 @@ public sealed class WaylandHostWindow : IHostWindow
         _logicalWidth = ToLogical(_width);
         _logicalHeight = ToLogical(_height);
         ApplyViewport();
+        ApplyWindowSizeLimits();
 
         _surface!.Commit();
         _display.Flush();
@@ -241,6 +250,10 @@ public sealed class WaylandHostWindow : IHostWindow
                     case "wp_pointer_warp_v1" when _warp is null:
                         _warp = WpPointerWarpV1.Bind(_registry, g.Name, 1,
                             new EmptyWarpListener(), null);
+                        break;
+                    case "wp_cursor_shape_manager_v1" when _cursorShapeManager is null:
+                        _cursorShapeManager = WpCursorShapeManagerV1.Bind(_registry, g.Name,
+                            Math.Min(g.Version, 2), new EmptyCursorShapeManagerListener(), null);
                         break;
                     case "wl_seat" when _seat is null:
                         _seat = WlSeat.Bind(_registry, g.Name, Math.Min(g.Version, 7),
@@ -435,6 +448,8 @@ public sealed class WaylandHostWindow : IHostWindow
         {
             if (fullscreen)
             {
+                // A fixed min=max size must not clamp the fullscreen configure.
+                ClearWindowSizeLimits();
                 // Pin the request to the monitor selected for this nested
                 // output; without an explicit output the compositor may pick
                 // whichever monitor currently has the active window.
@@ -457,8 +472,15 @@ public sealed class WaylandHostWindow : IHostWindow
             Log.Warn($"wayland host fullscreen={fullscreen} not applied yet " +
                      $"(buffer={_width}x{_height})");
 
-        if (!fullscreen && _requestedWidth > 0 && _requestedHeight > 0)
-            ApplyRequestedSize();
+        if (!fullscreen)
+        {
+            if (_requestedWidth > 0 && _requestedHeight > 0 &&
+                (Math.Abs(_requestedWidth - _width) > 2 ||
+                 Math.Abs(_requestedHeight - _height) > 2))
+                ApplyRequestedSize();
+            else
+                ApplyWindowSizeLimits();
+        }
     }
 
     public void SetOriginalSize(int width, int height)
@@ -500,11 +522,49 @@ public sealed class WaylandHostWindow : IHostWindow
         }
     }
 
+    /// <summary>
+    /// Keep the window at exactly one size: KWin then hides the maximize button
+    /// and the resize handles. The size follows the game window; the session
+    /// rebuilds the host when the game changes size, so the user never needs to
+    /// drag it.
+    /// </summary>
+    private void ApplyWindowSizeLimits()
+    {
+        if (_toplevel is null || _fullscreen || _logicalWidth <= 0 || _logicalHeight <= 0) return;
+        try
+        {
+            _toplevel.SetMinSize(_logicalWidth, _logicalHeight);
+            _toplevel.SetMaxSize(_logicalWidth, _logicalHeight);
+            _display.Flush();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"wayland host size limits failed: {ex.Message}");
+        }
+    }
+
+    private void ClearWindowSizeLimits()
+    {
+        if (_toplevel is null) return;
+        try
+        {
+            _toplevel.SetMinSize(0, 0);
+            _toplevel.SetMaxSize(0, 0);
+            _display.Flush();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"wayland host size limit reset failed: {ex.Message}");
+        }
+    }
+
     private void OnSeatCapabilities(WlSeat.CapabilityEnum capabilities)
     {
         bool hasPointer = (capabilities & WlSeat.CapabilityEnum.Pointer) != 0;
         if (!hasPointer)
         {
+            _cursorShapeDevice?.Dispose();
+            _cursorShapeDevice = null;
             _pointer?.Dispose();
             _pointer = null;
             _pointerOnSurface = false;
@@ -513,6 +573,18 @@ public sealed class WaylandHostWindow : IHostWindow
         {
             try { _pointer = _seat.GetPointer(_pointerListener, null); }
             catch (Exception ex) { Log.Warn($"wayland host pointer unavailable: {ex.Message}"); }
+        }
+        if (_pointer is not null && _cursorShapeDevice is null && _cursorShapeManager is not null)
+        {
+            try
+            {
+                _cursorShapeDevice = _cursorShapeManager.GetPointer(_pointer,
+                    new EmptyCursorShapeDeviceListener(), null);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"wayland host cursor shape unavailable: {ex.Message}");
+            }
         }
 
         bool hasKeyboard = (capabilities & WlSeat.CapabilityEnum.Keyboard) != 0;
@@ -532,6 +604,7 @@ public sealed class WaylandHostWindow : IHostWindow
     {
         _pointerEnterSerial = serial;
         _pointerOnSurface = true;
+        ApplyCursorShape();
         _lastPointerX = ToPixelsX(logicalX);
         _lastPointerY = ToPixelsY(logicalY);
         Pointer?.Invoke(new OverlayPointerEvent(OverlayPointerKind.Enter,
@@ -659,6 +732,95 @@ public sealed class WaylandHostWindow : IHostWindow
         return true;
     }
 
+    /// <summary>
+    /// Forward the game's cursor shape name (wlr/cursor-shape naming) to KWin.
+    /// Empty means the client used an image cursor, which we cannot forward
+    /// yet; fall back to the theme default.
+    /// </summary>
+    public void SetCursorShape(string shape)
+    {
+        string normalized = string.IsNullOrWhiteSpace(shape) ? "default" : shape;
+        lock (_cursorShapeGate)
+        {
+            _pendingCursorShape = normalized;
+            _cursorShapePending = true;
+        }
+    }
+
+    private void ProcessPendingCursorShape()
+    {
+        string shape;
+        lock (_cursorShapeGate)
+        {
+            if (!_cursorShapePending) return;
+            _cursorShapePending = false;
+            shape = _pendingCursorShape;
+        }
+        if (shape == _cursorShape) return;
+        _cursorShape = shape;
+        ApplyCursorShape();
+    }
+
+    private void ApplyCursorShape()
+    {
+        if (_cursorShapeDevice is null || _pointerEnterSerial == 0) return;
+        try
+        {
+            _cursorShapeDevice.SetShape(_pointerEnterSerial, ParseCursorShape(_cursorShape));
+            _display.Flush();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"wayland host cursor shape failed: {ex.Message}");
+        }
+    }
+
+    private static WpCursorShapeDeviceV1.ShapeEnum ParseCursorShape(string name) => name switch
+    {
+        "context-menu" => WpCursorShapeDeviceV1.ShapeEnum.ContextMenu,
+        "help" => WpCursorShapeDeviceV1.ShapeEnum.Help,
+        "pointer" => WpCursorShapeDeviceV1.ShapeEnum.Pointer,
+        "progress" => WpCursorShapeDeviceV1.ShapeEnum.Progress,
+        "wait" => WpCursorShapeDeviceV1.ShapeEnum.Wait,
+        "cell" => WpCursorShapeDeviceV1.ShapeEnum.Cell,
+        "crosshair" => WpCursorShapeDeviceV1.ShapeEnum.Crosshair,
+        "text" => WpCursorShapeDeviceV1.ShapeEnum.Text,
+        "vertical-text" => WpCursorShapeDeviceV1.ShapeEnum.VerticalText,
+        "alias" => WpCursorShapeDeviceV1.ShapeEnum.Alias,
+        "copy" => WpCursorShapeDeviceV1.ShapeEnum.Copy,
+        "move" => WpCursorShapeDeviceV1.ShapeEnum.Move,
+        "no-drop" => WpCursorShapeDeviceV1.ShapeEnum.NoDrop,
+        "not-allowed" => WpCursorShapeDeviceV1.ShapeEnum.NotAllowed,
+        "grab" => WpCursorShapeDeviceV1.ShapeEnum.Grab,
+        "grabbing" => WpCursorShapeDeviceV1.ShapeEnum.Grabbing,
+        "e-resize" => WpCursorShapeDeviceV1.ShapeEnum.EResize,
+        "n-resize" => WpCursorShapeDeviceV1.ShapeEnum.NResize,
+        "ne-resize" => WpCursorShapeDeviceV1.ShapeEnum.NeResize,
+        "nw-resize" => WpCursorShapeDeviceV1.ShapeEnum.NwResize,
+        "s-resize" => WpCursorShapeDeviceV1.ShapeEnum.SResize,
+        "se-resize" => WpCursorShapeDeviceV1.ShapeEnum.SeResize,
+        "sw-resize" => WpCursorShapeDeviceV1.ShapeEnum.SwResize,
+        "w-resize" => WpCursorShapeDeviceV1.ShapeEnum.WResize,
+        "ew-resize" => WpCursorShapeDeviceV1.ShapeEnum.EwResize,
+        "ns-resize" => WpCursorShapeDeviceV1.ShapeEnum.NsResize,
+        "nesw-resize" => WpCursorShapeDeviceV1.ShapeEnum.NeswResize,
+        "nwse-resize" => WpCursorShapeDeviceV1.ShapeEnum.NwseResize,
+        "col-resize" => WpCursorShapeDeviceV1.ShapeEnum.ColResize,
+        "row-resize" => WpCursorShapeDeviceV1.ShapeEnum.RowResize,
+        "all-scroll" => WpCursorShapeDeviceV1.ShapeEnum.AllScroll,
+        "zoom-in" => WpCursorShapeDeviceV1.ShapeEnum.ZoomIn,
+        "zoom-out" => WpCursorShapeDeviceV1.ShapeEnum.ZoomOut,
+        "dnd-ask" => WpCursorShapeDeviceV1.ShapeEnum.DndAsk,
+        "all-resize" => WpCursorShapeDeviceV1.ShapeEnum.AllResize,
+        _ => WpCursorShapeDeviceV1.ShapeEnum.Default,
+    };
+
+    private void ProcessPendingState()
+    {
+        ProcessPendingWarp();
+        ProcessPendingCursorShape();
+    }
+
     private void ProcessPendingWarp()
     {
         if (_warp is null || _pointer is null || _surface is null) return;
@@ -719,7 +881,7 @@ public sealed class WaylandHostWindow : IHostWindow
             if (_display.PrepareRead() < 0)
             {
                 _display.DispatchPending();
-                ProcessPendingWarp();
+                ProcessPendingState();
                 return;
             }
 
@@ -730,7 +892,7 @@ public sealed class WaylandHostWindow : IHostWindow
             {
                 _display.CancelRead();
                 _display.DispatchPending();
-                ProcessPendingWarp();
+                ProcessPendingState();
                 return;
             }
 
@@ -738,13 +900,13 @@ public sealed class WaylandHostWindow : IHostWindow
             {
                 _display.CancelRead();
                 _display.DispatchPending();
-                ProcessPendingWarp();
+                ProcessPendingState();
                 return;
             }
 
             _display.DispatchPending();
             _display.Flush();
-            ProcessPendingWarp();
+            ProcessPendingState();
         }
         catch (Exception ex)
         {
@@ -808,6 +970,8 @@ public sealed class WaylandHostWindow : IHostWindow
     private sealed class EmptyFractionalScaleManagerListener : WpFractionalScaleManagerV1.Listener { }
     private sealed class EmptyDecorationManagerListener : ZxdgDecorationManagerV1.Listener { }
     private sealed class EmptyWarpListener : WpPointerWarpV1.Listener { }
+    private sealed class EmptyCursorShapeManagerListener : WpCursorShapeManagerV1.Listener { }
+    private sealed class EmptyCursorShapeDeviceListener : WpCursorShapeDeviceV1.Listener { }
 
     private sealed class WmBaseListener : XdgWmBase.Listener
     {

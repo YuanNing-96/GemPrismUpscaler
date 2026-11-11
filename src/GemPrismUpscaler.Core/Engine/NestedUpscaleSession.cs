@@ -237,10 +237,11 @@ public sealed class NestedUpscaleSession : IDisposable
 
     private void MirrorClientCursorWarp()
     {
-        if (_ipc is null || _input is null || !_input.HasPointerReference) return;
+        if (_ipc is null || _input is null) return;
 
         long seq = 0;
         double x = 0, y = 0;
+        string? shape = null;
         bool supported = false;
         using (var seats = _ipc.GetSeats())
         {
@@ -251,6 +252,9 @@ public sealed class NestedUpscaleSession : IDisposable
                 seq = seqElement.GetInt64();
                 x = seat.TryGetProperty("cursor_hint_x", out var xElement) ? xElement.GetDouble() : 0;
                 y = seat.TryGetProperty("cursor_hint_y", out var yElement) ? yElement.GetDouble() : 0;
+                shape = seat.TryGetProperty("cursor_shape", out var shapeElement)
+                    ? shapeElement.GetString()
+                    : null;
                 supported = true;
                 break;
             }
@@ -258,8 +262,6 @@ public sealed class NestedUpscaleSession : IDisposable
         // System sway does not expose the hint; the absolute re-anchor in
         // NestedInput stays in charge there.
         if (!supported) return;
-        if (seq == Interlocked.Read(ref _cursorHintSeq)) return;
-        Interlocked.Exchange(ref _cursorHintSeq, seq);
 
         WindowState? state = null;
         lock (_stateGate)
@@ -267,8 +269,42 @@ public sealed class NestedUpscaleSession : IDisposable
             if (_states.TryGetValue(_focusedId, out var focused))
                 state = focused;
         }
-        if (state is null || state.Host is null || !state.Host.IsFocused) return;
+        if (state?.Host is null) return;
+
+        // The shape follows the focused game window; the host stores it and
+        // applies it on the next pointer enter (no pointer focus = invisible).
+        state.Host.SetCursorShape(shape ?? string.Empty);
+
         if (state.Ignored || state.Switching) return;
+
+        // Wine's X11 driver moves the nested X pointer with XWarpPointer for
+        // dialogs; that never reaches sway's locked-pointer hint, so read the
+        // XWayland pointer and mirror game-initiated moves here.
+        if (string.Equals(state.Info.Shell, "xwayland", StringComparison.Ordinal) &&
+            state.Host.IsFocused && _input.HasPointerReference && _probe is not null &&
+            _probe.TryGetPointerPosition(out int pointerX, out int pointerY))
+        {
+            var reference = _input.PointerReference;
+            if (Math.Abs(pointerX - reference.X) > 2 || Math.Abs(pointerY - reference.Y) > 2)
+            {
+                MirrorWarpToHost(state, pointerX, pointerY, "x11-pointer");
+                _input.SetPointerReference(pointerX, pointerY);
+            }
+        }
+
+        if (!state.Host.IsFocused) return;
+        if (!_input.HasPointerReference) return;
+        if (seq == Interlocked.Read(ref _cursorHintSeq)) return;
+        Interlocked.Exchange(ref _cursorHintSeq, seq);
+
+        var hint = _input.PointerReference;
+        if (Math.Abs(x - hint.X) <= 2 && Math.Abs(y - hint.Y) <= 2) return;
+        MirrorWarpToHost(state, (int)Math.Round(x), (int)Math.Round(y), "hint");
+    }
+
+    private void MirrorWarpToHost(WindowState state, int x, int y, string source)
+    {
+        if (state.Host is null || _input is null) return;
 
         int cropX = state.Crop.X, cropY = state.Crop.Y;
         int sourceWidth = state.SourceWidth, sourceHeight = state.SourceHeight;
@@ -279,9 +315,6 @@ public sealed class NestedUpscaleSession : IDisposable
         double localY = y - cropY;
         if (localX < 0 || localY < 0 || localX >= sourceWidth || localY >= sourceHeight) return;
 
-        var reference = _input.PointerReference;
-        if (Math.Abs(x - reference.X) <= 2 && Math.Abs(y - reference.Y) <= 2) return;
-
         var dest = LayoutCalculator.ComputeDestRect(sourceWidth, sourceHeight,
             hostWidth, hostHeight, _mode);
         int hostX = dest.X + (int)Math.Round(localX * dest.Width / sourceWidth);
@@ -290,9 +323,8 @@ public sealed class NestedUpscaleSession : IDisposable
         hostY = Math.Clamp(hostY, 0, hostHeight - 1);
 
         if (TraceInput)
-            Emit($"nested cursor hint warp seq={seq} sway={x:0},{y:0} host={hostX},{hostY}");
+            Emit($"nested cursor warp source={source} game={x},{y} host={hostX},{hostY}");
         state.Host.WarpPointer(hostX, hostY);
-        _input.SetPointerReference((int)Math.Round(x), (int)Math.Round(y));
     }
 
     private void Loop()

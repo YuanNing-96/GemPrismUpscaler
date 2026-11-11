@@ -529,6 +529,13 @@ Engine / WaylandUpscaleSession
   `zwp_virtual_keyboard_manager_v1` helper（`tools/gemprism-vkeyboard`）。
 - 光标：游戏的 `zwp_locked_pointer_v1` 提示经 sway 补丁 → IPC → 应用 →
   `wp_pointer_warp_v1`，KWin 可见光标跟着跳；详见 [pointer-warp.md](pointer-warp.md)。
+- 光标形状：sway 补丁把 `wp_cursor_shape_v1` 的形状名暴露到 `get_seats.cursor_shape`，
+  宿主用 KDE 的 `wp_cursor_shape_manager_v1` 直接显示（KDE 原生光标，大小/主题一致）。
+  Wine 实际使用图像光标，图像转发列为 v1.0 之后的优化项；X11 游戏的指针跳转由嵌套
+  XWayland 的 `XQueryPointer` 轮询补偿。详见 [cursor.md](cursor.md)。
+- 宿主窗口：窗口化时固定为游戏窗口大小（`set_min_size` = `set_max_size`），KWin 因此隐藏
+  最大化按钮、禁止拖拽缩放，只保留最小化/关闭；全屏切换前清掉尺寸限制，退出后恢复。
+  X11 宿主回退（`GEMPRISM_HOST_X11=1`）仍是旧的装饰行为。
 - 窗口识别：Profile / token + PID / sway IPC / transient+window type；对话框单独宿主窗口并
   `xdg_toplevel.set_parent`。窗口化宿主尺寸取游戏窗口实际矩形，退出超分后恢复。
 - 超分/还原切换：在 `SetFullscreen`/`UnsetFullscreen` **之前**按目标尺寸创建好 swapchain

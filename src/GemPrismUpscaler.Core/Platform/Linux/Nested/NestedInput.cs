@@ -223,6 +223,12 @@ public sealed class NestedInput : IDisposable
         {
             X11Native.XWarpPointer(_x11.Handle, 0, _x11.Root, 0, 0, 0, 0, x, y);
             _x11.Sync();
+            // Remember where we put the nested pointer: the session polls
+            // XQueryPointer to detect a game-initiated warp by comparing
+            // against this reference.
+            _lastPointerX = x;
+            _lastPointerY = y;
+            _havePointerPosition = true;
             return;
         }
 

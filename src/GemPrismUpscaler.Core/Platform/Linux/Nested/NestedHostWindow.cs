@@ -71,6 +71,10 @@ public sealed class NestedHostWindow : IHostWindow
     public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb)
         => new(_display, Window, _width, _height, effect, sourceRgb);
 
+    // KWin derives an X11 host's cursor from the window's X cursor; forwarding
+    // the nested shape here is left for the X11 fallback backend.
+    public void SetCursorShape(string shape) { }
+
     // CanPrepareSize is false; the session never takes this path on X11.
     public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb, int width, int height)
         => CreateBlitter(effect, sourceRgb);
