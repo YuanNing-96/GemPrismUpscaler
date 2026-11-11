@@ -530,7 +530,12 @@ Engine / WaylandUpscaleSession
 - 光标：游戏的 `zwp_locked_pointer_v1` 提示经 sway 补丁 → IPC → 应用 →
   `wp_pointer_warp_v1`，KWin 可见光标跟着跳；详见 [pointer-warp.md](pointer-warp.md)。
 - 窗口识别：Profile / token + PID / sway IPC / transient+window type；对话框单独宿主窗口并
-  `xdg_toplevel.set_parent`。窗口化宿主尺寸取游戏窗口实际矩形，退出超分后恢复。- 最小化：X11 游戏按 ICCCM 向嵌套 XWayland 的 root 发 `WM_CHANGE_STATE(IconicState)`，
+  `xdg_toplevel.set_parent`。窗口化宿主尺寸取游戏窗口实际矩形，退出超分后恢复。
+- 超分/还原切换：在 `SetFullscreen`/`UnsetFullscreen` **之前**按目标尺寸创建好 swapchain
+  （Wayland 宿主接受任意 buffer 尺寸，`wp_viewport` 把预呈现帧映射到当前窗口）。configure
+  到达时合成器已经持有目标尺寸的帧，不会再把旧窗口缓冲拉伸约 300ms。X11 宿主
+  （`GEMPRISM_HOST_X11=1`）的 swapchain 受窗口 extent 限制，仍走 configure 后重建。
+- 最小化：X11 游戏按 ICCCM 向嵌套 XWayland 的 root 发 `WM_CHANGE_STATE(IconicState)`，
   sway 没有最小化概念、忽略该请求（`WM_STATE` 一直 Normal、surface 保持 mapped），客户端在
   隐藏自己前会画一帧全黑。应用监听这条 ClientMessage（`SubstructureNotifyMask`，不能选
   `SubstructureRedirectMask`，否则会把请求从 sway 手里抢走），收到后在 600ms 内丢弃整帧全黑的

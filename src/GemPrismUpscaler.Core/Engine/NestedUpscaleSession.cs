@@ -1037,6 +1037,9 @@ public sealed class NestedUpscaleSession : IDisposable
         state.Switching = true;
         try
         {
+            var effect = upscale ? _effect : OriginalEffect;
+            bool prepared = PrepareModePresentation(state, upscale, effect);
+
             if (upscale)
             {
                 state.Host.SetFullscreen(true);
@@ -1056,9 +1059,10 @@ public sealed class NestedUpscaleSession : IDisposable
 
             PumpHost(state, 10);
             state.Upscale = upscale;
-            ReplaceBlitter(state, upscale ? _effect : OriginalEffect);
-            // The swapchain was just recreated; a fresh capture session always
-            // delivers its first frame, so a static game is not left black.
+            if (!prepared) ReplaceBlitter(state, effect);
+            // The swapchain may have been recreated; a fresh capture session
+            // always delivers its first frame, so a static game is not left
+            // black.
             if (state.Capture is ToplevelCapture toplevelCapture)
                 toplevelCapture.RestartSession();
             state.LastHostWidth = state.Host.Width;
@@ -1079,6 +1083,80 @@ public sealed class NestedUpscaleSession : IDisposable
         {
             state.Switching = false;
         }
+    }
+
+    /// <summary>
+    /// G4 A: build the presenter for the size the window is about to become
+    /// *before* asking the compositor to change its geometry. KWin otherwise
+    /// scales the old window-sized buffer into the new fullscreen surface for
+    /// the ~300 ms a fresh swapchain and its pipelines take to build (the
+    /// "first upscale frame is stretched" report).
+    ///
+    /// A native Wayland surface accepts a buffer of any size and maps it onto
+    /// the current logical window through wp_viewport, so the prepared buffer
+    /// can be presented while the window is still small. The configure that
+    /// follows only changes the viewport destination; the frame the compositor
+    /// already holds is then shown at the new size instead of the old one.
+    /// </summary>
+    private bool PrepareModePresentation(WindowState state, bool upscale, EffectDefinition effect)
+    {
+        if (!state.Host!.CanPrepareSize || state.Capture is null) return false;
+
+        bool fullscreenTarget = upscale || state.LastGameFullscreen;
+        int width = fullscreenTarget ? _outputWidth : Math.Max(1, state.WindowedWidth);
+        int height = fullscreenTarget ? _outputHeight : Math.Max(1, state.WindowedHeight);
+        if (width < 2 || height < 2) return false;
+        if (width == state.Host.Width && height == state.Host.Height) return false;
+
+        // A surface that already has a live swapchain cannot serve a second
+        // VkDevice ("no graphics+present queue family" from the driver), so
+        // retire the old presenter first. KWin keeps the last attached buffer
+        // on screen until the prepared one presents, so the small window does
+        // not flash while the new swapchain is built.
+        var previous = state.Blitter;
+        state.Blitter = null;
+        try { previous?.Dispose(); } catch { }
+
+        VulkanBlitter prepared;
+        try
+        {
+            prepared = state.Host.CreateBlitter(effect, state.Capture.SourceIsRgb,
+                width, height);
+        }
+        catch (Exception ex)
+        {
+            Emit($"nested mode prepare failed for '{DescribeWindow(state.Info)}': " +
+                 $"{ex.GetType().Name}: {ex.Message}");
+            try
+            {
+                state.Blitter = state.Host.CreateBlitter(upscale ? OriginalEffect : _effect,
+                    state.Capture.SourceIsRgb);
+            }
+            catch (Exception recover)
+            {
+                Emit($"nested mode prepare recovery failed: " +
+                     $"{recover.GetType().Name}: {recover.Message}");
+            }
+            state.LastHostWidth = state.Host.Width;
+            state.LastHostHeight = state.Host.Height;
+            return false;
+        }
+
+        state.Blitter = prepared;
+        state.Upscale = upscale;
+        state.LastHostWidth = state.Host.Width;
+        state.LastHostHeight = state.Host.Height;
+        state.Diff.Reset();
+        state.ForceRender = true;
+        UpdateDest(state);
+        Emit($"nested mode prepared {width}x{height} for " +
+             $"'{DescribeWindow(state.Info)}' before the window resize");
+
+        // Present now, while the window is still its old size. The configure
+        // that follows only moves the viewport destination; the compositor
+        // already holds this target-sized frame.
+        RenderState(state, new FrameStats());
+        return true;
     }
 
     /// <summary>
@@ -1854,10 +1932,15 @@ public sealed class NestedUpscaleSession : IDisposable
     private void ReplaceBlitter(WindowState state, EffectDefinition effect)
     {
         if (state.Host is null) return;
+        ReplaceBlitter(state, state.Host.CreateBlitter(effect,
+            state.Capture?.SourceIsRgb ?? true));
+    }
+
+    private void ReplaceBlitter(WindowState state, VulkanBlitter blitter)
+    {
         try { state.Blitter?.Dispose(); }
         catch (Exception ex) { Log.Warn($"nested blitter dispose: {ex.Message}"); }
-        state.Blitter = state.Host.CreateBlitter(effect,
-            state.Capture?.SourceIsRgb ?? true);
+        state.Blitter = blitter;
     }
 
     private void PumpHost(WindowState state, int count)

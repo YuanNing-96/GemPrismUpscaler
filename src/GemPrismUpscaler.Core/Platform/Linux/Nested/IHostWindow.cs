@@ -81,4 +81,21 @@ public interface IHostWindow : IDisposable
 
     /// <summary>Create the presenter for this window's current size.</summary>
     VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb);
+
+    /// <summary>
+    /// True when <see cref="CreateBlitter(EffectDefinition, bool, int, int)"/>
+    /// can build a swapchain for a presentation size the window does not have
+    /// yet. A native Wayland surface accepts any buffer size (the compositor
+    /// scales it through wp_viewport); an X11 window is fixed to its current
+    /// extent, so the X11 host cannot prepare ahead.
+    /// </summary>
+    bool CanPrepareSize { get; }
+
+    /// <summary>
+    /// Create a presenter for a future presentation size without waiting for
+    /// the window to be resized. Only valid when <see cref="CanPrepareSize"/>.
+    /// The window keeps its current logical size; the prepared buffer is shown
+    /// scaled into it until the compositor sends the new configure.
+    /// </summary>
+    VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb, int width, int height);
 }

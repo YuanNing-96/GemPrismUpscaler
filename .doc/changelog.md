@@ -62,6 +62,12 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   也一样），宿主会在用户点开后被立刻弹回任务栏，比保持显示更糟。测试与对照记录见
   `.agent/M2b-归档-游戏自我最小化.md`；以后要做“宿主跟随最小化”的 sway/wlroots
   修复方案与成本评估见 [minimize.md](minimize.md)。
+- **超分/还原切换的第一帧被拉伸（G4 A）**：进入超分时先把目标 4K 交换链建好，并把当前帧
+  预呈现进去，再发 `set_fullscreen`；退出时同理先把窗口尺寸的交换链建好再 `unset_fullscreen`。
+  configure 到达时合成器已经持有正确尺寸的帧，不再把旧的窗口缓冲拉伸 ~300ms（“第一帧 4:3
+  拉伸铺满、过一会儿才归位”）。Wayland 宿主可以给 `wl_surface` 挂任意尺寸的 buffer，
+  `wp_viewport` 负责映射到当前窗口；X11 宿主受窗口 extent 限制，仍走 configure 后重建。
+  游戏自己改变窗口尺寸的路径不做特殊处理（保持原逻辑，记为已知的可能问题）。
 
 ### 验证
 
@@ -69,6 +75,9 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - 独立探针（未提交）：warp 请求 `buffer=450,300` 后下一次 motion 正好回报 `450,300`；
   截图测得窗口内容在屏幕上为 1:1 物理像素。
 - zenity 冒烟：窗口 344×270 → 全屏 `logical=2560x1440 buffer=3840x2160` → 还原 344×270。
+- G4 A 冒烟（zenity 300×226）：`mode prepared 3840x2160` → `mode=upscale`；再
+  `mode prepared 300x226` → `reconfigured logical=200x151 buffer=300x227 fullscreen=False`
+  → `mode=original`；两次都没有 swapchain 错误，全屏/还原后的截图正常，无拉伸帧。
 - 实机游戏（秽翼的尤斯蒂娅，Proton/Wine Wayland）：界面显示、悬停、点击、光标跳转、
   超分进出全部正常；一次退出确认框记录 25 次 warp。
 - `GEMPRISM_HOST_X11=1` 冒烟：旧 X11 宿主窗口仍可创建并呈现。
@@ -80,6 +89,9 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
   恢复宿主，需要用户从任务栏恢复（反方向正常）。
 - **无焦点窃取**：Wayland 下 `Focus()`/`Activate()`/`Raise()` 为空操作。
 - **显示器热插拔**：运行中的虚拟桌面不会跟随分辨率/刷新率变化（v1.0 规则）；新会话才重新快照。
+- **游戏内全屏（腐姬）**：X11 全屏黑屏（游戏画在 override-redirect 窗口上，toplevel 抓取看不到）；
+  Wayland 全屏画面居左、点击错位（KDE 直连同样异常）。v1.0 不解决，根因与备选方案见
+  [`fullscreen.md`](fullscreen.md)。
 
 ## v0.4.0（2026-11-07）· M2a：Wayland layer-shell、XWayland 混合与 portal 捕获
 

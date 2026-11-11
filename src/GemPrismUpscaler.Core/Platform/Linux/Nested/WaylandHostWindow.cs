@@ -111,6 +111,10 @@ public sealed class WaylandHostWindow : IHostWindow
     // xdg-shell has no "resize to WxH" request; the session recreates the
     // toplevel when the game window changes size.
     public bool CanResize => false;
+    // A Wayland surface accepts a buffer of any size; wp_viewport maps it onto
+    // the current logical window. That lets the session build the next
+    // presentation size before KWin sends the fullscreen/unfullscreen configure.
+    public bool CanPrepareSize => true;
     public int Width => _width;
     public int Height => _height;
     public string MonitorName => _output?.Name ?? string.Empty;
@@ -764,8 +768,25 @@ public sealed class WaylandHostWindow : IHostWindow
     }
 
     public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb)
-        => new(_display.Handle, _surface!.Handle, _width, _height, effect, sourceRgb,
-            preferredPresentMode: PresentModeKHR.MailboxKhr);
+        => CreateBlitter(effect, sourceRgb, _width, _height);
+
+    public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb, int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        var blitter = new VulkanBlitter(_display.Handle, _surface!.Handle, width, height,
+            effect, sourceRgb, preferredPresentMode: PresentModeKHR.MailboxKhr);
+        if (width != _width || height != _height)
+        {
+            // The window keeps its current logical size (and viewport
+            // destination); only the presentation buffer grows/shrinks. KWin
+            // scales it until the configure for the new window size arrives.
+            _width = width;
+            _height = height;
+            ApplyViewport();
+        }
+        return blitter;
+    }
 
     // ---------------------------------------------------------------- listeners
 

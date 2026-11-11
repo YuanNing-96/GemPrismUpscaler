@@ -44,6 +44,9 @@ public sealed class NestedHostWindow : IHostWindow
     public string MonitorName => _monitor.Name;
     public bool IsWayland => false;
     public bool CanResize => true;
+    // The X11 swapchain is tied to the window's current extent; the session
+    // cannot build the next size before the WM resizes the window.
+    public bool CanPrepareSize => false;
     public IntPtr VulkanDisplay => IntPtr.Zero;
     public IntPtr VulkanSurface => IntPtr.Zero;
 
@@ -67,6 +70,10 @@ public sealed class NestedHostWindow : IHostWindow
 
     public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb)
         => new(_display, Window, _width, _height, effect, sourceRgb);
+
+    // CanPrepareSize is false; the session never takes this path on X11.
+    public VulkanBlitter CreateBlitter(EffectDefinition effect, bool sourceRgb, int width, int height)
+        => CreateBlitter(effect, sourceRgb);
 
     public event Action<OverlayPointerEvent>? Pointer;
     public event Action<OverlayKeyEvent>? Key;
