@@ -69,6 +69,15 @@ X11 跳转是另一条路径：Wine 的 X11 驱动用 `XWarpPointer` 移动内�
 
 结论：A 的命名路径对 Wine 游戏无效；要显示真正的“手”，必须转发图像（方案 B）。
 
+**“有非指针图标就显示手”的启发式也验证过，不成立**：
+
+- Wine 在**所有位置**（按钮、文字、背景、空白）都用图像光标，`cursor_shape` 一律为空；
+  “空 = 非箭头”会把整屏都显示成手，不能用。
+- 又试过在 sway 里对光标图像做指纹（`cursor_image_hash`）：光标 surface 的
+  `current.buffer` 在 `set_cursor` 时和随后的 commit 里都取不到（hash=0、buffer=NULL），
+  说明拿不到可读的像素（可能是 dmabuf 或已被客户端释放）。所以“图像变了就显示手”
+  这个廉价启发式也不可靠，同样要落到 B 的像素提取路径。
+
 ## 5. 方案 B（图像光标，v1.0 之后）
 
 1. sway 补丁：在 `cursor_set_image_surface` 设置/提交光标 surface 时，读取
