@@ -31,7 +31,7 @@ VL 的 push constant 是 **176 B**（19 张纹理），超过 Vulkan 保证的 1
 
 ## 自定义 effect
 
-用户 effect 不在本目录编译；它们的 TOML + 预编译 `.spv` 放在配置目录的 `effects/` 下。ABI、绑定和 push constant 约定见 [.doc/effects.md](../.doc/effects.md)，样例见 `examples/effects/sharpen-2x/`。
+用户 effect 不在本目录编译；它们的 TOML + 预编译 `.spv` 放在配置目录的 `effects/` 下。ABI、绑定和 push constant 约定见 [docs/dev/effects.md](../docs/dev/effects.md)，样例见 `docs/examples/effects/sharpen-2x/`。
 
 ## Lanczos
 

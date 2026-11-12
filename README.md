@@ -1,220 +1,96 @@
 # 宝石棱镜 · GemPrismUpscaler
 
-> Linux 优先的通用窗口超分工具 · 独立进程 · 不注入游戏
+> Linux 窗口超分工具 · 独立进程 · 不注入游戏 · v1.0
 
-宝石棱镜把低分辨率的游戏窗口实时超分到全屏显示。它支持任意分辨率与任意宽高比的组合，目标是通过可配置的 effect 管线组合 Anime4K、FSR 等算法。它不修改游戏、不注入 DLL、不依赖 gamescope，因此对 32/64 位、D3D9/11/12/OpenGL/Vulkan 游戏一视同仁。
+宝石棱镜把低分辨率的游戏窗口实时超分到全屏。它不修改游戏、不注入 DLL、不依赖 gamescope；对 32/64 位、D3D9/11/12/OpenGL/Vulkan 游戏一视同仁。
 
-当前版本是 **v0.5.0（M2b 主路径）**：私有嵌套 sway + `ext-image-copy-capture` 按 toplevel 抓帧 + 原生 Wayland 宿主窗口；视觉小说/2D 窗口化游戏可捕获、超分、还原、输入、弹窗和退出。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。
-
-M2bβ2（XWayland 指针锁/raw）和原 M2c（嵌套 DMA-BUF 零拷贝、SDR 色彩准确性）不阻塞 v1.0，推迟为 v1.0 后可选优化；v1.0 = M2b 主路径 + M3 打磨/分发。M1c 的动画仍不做，留到 v1.0 前评估。
+v1.0 的主路径是**嵌套启动**：在私有虚拟桌面里启动游戏，按窗口抓取，再以原生 Wayland 宿主窗口放大显示。适合窗口化运行的视觉小说和 2D 游戏。
 
 ## 支持范围
 
-| 维度 | 状态 |
+| 维度 | v1.0 |
 |---|---|
-| 操作系统 | **Linux：部分支持**（X11/XWayland + M2a 原生 Wayland portal + M2b 嵌套）；**Windows：暂不支持**；**macOS：暂不支持** |
-| 桌面/会话 | **KDE Plasma 6 Wayland + XWayland：已验证**；M2b 私有嵌套 sway（headless 单输出）；原生 Wayland：M2a portal + layer-shell；KDE X11：理论可用、未验证；GNOME / wlroots：未验证（M2 只做协议级） |
-| 窗口类型 | X11 / XWayland 顶层窗口：支持（嵌套走按 toplevel 抓取）；原生 Wayland 窗口：M2a portal 捕获 / M2b 嵌套；窗口化原生捕获含标题栏/阴影 |
-| 显示器 | 单显示器：支持；多显示器：M1a 基础 + M2a Wayland 输出枚举/分数缩放/基础热插拔；嵌套会话按所选显示器物理分辨率固定单输出 |
-| HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；完整 HDR 游戏捕获/10-bit 输出：v1.0 后 |
-| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入/自动跟随焦点：M2b 嵌套合成器；**XWayland 指针锁/raw：v1.0 不支持，v1.0 后评估** |
-| 原生 Wayland 热键 | **支持（KDE）**：portal GlobalShortcuts；首次授权，若 KDE 存成 `none` 需系统设置手动分配 |
-| GPU | NVIDIA 专有驱动：已验证；AMD/Intel Vulkan：理论可用、未验证；多 GPU/混合显卡：未验证 |
-| 算法 | **Anime4K S/M/L/VL 2× + Lanczos-2：支持**（默认 S；VL 为实验最高画质档）；双线性回退：支持；FSR1、NIS、Lanczos-3、Bicubic：未排期 |
-| 自定义 effect | **支持**：TOML + 预编译 SPIR-V，运行时不需要 glslang；详见 [.doc/effects.md](.doc/effects.md) |
-| 脏矩形 | **支持**（64px 分块哈希 + CNN halo + 局部上传/重算 + 持久合成图）；可 `--no-dirty-rect` 关闭；自定义 effect 可声明 `requires_full_frame` |
-| 指标 | **支持**：capture/diff/upload/effect/present 分段、GPU timestamp、NVML GPU/显存、进程 CPU、p95、CSV |
-| 设置/Profile | **支持**：TOML 持久化、热键/日志/第二实例/默认显示器/默认效果/缩放/托盘行为/开发模式；Profile 按 WM_CLASS / exe / Wine cmdline 自动套用 |
-| 托盘 | **可选**：KDE/XFCE/Cinnamon/MATE/Ubuntu GNOME（AppIndicator）等支持；GNOME 无扩展时不创建托盘，应用仍可正常使用 |
-| 动画 | **M1c 不做**；留到 v1.0 前评估 |
+| 桌面 | **KDE Plasma 6 Wayland + XWayland（唯一明确支持）** |
+| 启动方式 | 嵌套启动（推荐）、已有 X11/XWayland 窗口、已有原生 Wayland 全屏窗口 |
+| 输入 | 视觉小说/2D 键鼠；FPS/鼠标视角/raw input **不支持** |
+| 显示器 | 单屏、多屏独立输出；不做跨屏拼接 |
+| HDR | HDR 桌面下 SDR 直通；完整 HDR 捕获/10-bit 输出不做 |
+| GPU | NVIDIA 专有驱动已验证；AMD/Intel 未验证 |
+| 算法 | Anime4K S/M/L/VL 2× + Lanczos-2；双线性回退 |
+| 分发 | 解压即用压缩包；不提供 Flatpak、AUR、安装脚本或 `.desktop` |
 
-更细的兼容性、已测试组合和已知限制见 [.doc/compatibility.md](.doc/compatibility.md)。
+完整矩阵见 [docs/compatibility.md](docs/compatibility.md)，已知限制见 [docs/known-issues.md](docs/known-issues.md)。
 
-## 当前开发/验证环境
+## 下载与运行
 
-| 项 | 配置 |
-|---|---|
-| 发行版 | Arch Linux 系 |
-| 桌面 | KDE Plasma 6，Wayland 会话 + XWayland |
-| 显示 | HDMI-A-1 3840×2160@144Hz（HDR，150%，主屏）+ DP-1 1800×2880 竖屏（SDR，100%）；M1b 已在此双屏环境完成真实 4K/60 验收 |
-| GPU | AMD iGPU + NVIDIA RTX 4060 Laptop 8 GB；effect 在 NVIDIA |
-| .NET | 10.0.114 SDK |
-| Vulkan | 1.4，NVIDIA 专有驱动 |
-| 测试游戏 | 腐姬、秽翼的尤斯蒂娅（M0/M1a 验收） |
-
-## 系统要求
-
-- Linux，X11 或 XWayland；Vulkan 1.2 及以上
-- .NET 10 SDK（仅构建需要；运行使用构建产物）
-- 4K 输出建议 ≥2 GB 显存；M1b 4K S/M/L 测试图案的整卡占用约 782/812/820 MiB，真实游戏 + overlay 合计约 4.8–4.9 GiB（含游戏）；M1c 的 VL 在 720p 源 / 4K 输出下约 880 MiB（整卡，含其它进程）
-- 可选：`glslangValidator`、`spirv-val`（仅重新生成着色器或编写自定义 effect 时需要）
-- 不再需要 CMake/C++ 原生库：X11 使用 P/Invoke，Vulkan 使用 Silk.NET
-
-## 构建与测试
+发布包为自包含压缩包，不需要安装 .NET SDK，也不需要 root 权限。
 
 ```bash
-dotnet build GemPrismUpscaler.slnx -c Release   # 0 warning / 0 error
-dotnet test  GemPrismUpscaler.slnx -c Release   # 91/91
+tar -xzf GemPrismUpscaler-v1.0.0-linux-x64.tar.gz
+cd GemPrismUpscaler-v1.0.0-linux-x64
+./GemPrismUpscaler --doctor
+./GemPrismUpscaler
 ```
 
-重新生成 S/M/L/VL 着色器与 manifest（需要 `glslangValidator` 与 `spirv-val`）：
+也可以在文件管理器里双击 `GemPrismUpscaler`。如果双击没有反应，请从终端启动查看错误。
+
+## 快速开始
+
+1. 启动后保持默认的“嵌套启动”。
+2. 完全退出 Lutris（包括托盘）。
+3. 在命令框填入：
+
+   ```text
+   env LUTRIS_SKIP_INIT=1 lutris lutris:rungameid/3
+   ```
+
+4. 点“开始超分”。
+5. 用“暂停超分/继续超分”切回原窗口或放大画面；用“停止超分”结束会话。
+
+已有窗口：把启动方式改为“已有游戏窗口”，选 X11 窗口，或选“Wayland 全屏窗口”后用系统选择器选择。
+
+三分钟版本见 [docs/quickstart.md](docs/quickstart.md)，详细操作见 [docs/usage.md](docs/usage.md)。
+
+## 从源码构建
+
+需要 .NET 10 SDK、Vulkan 1.2+；重新生成着色器还需要 `glslangValidator`/`spirv-val`。
 
 ```bash
-python3 tools/build_shaders.py
-```
-
-运行程序不需要这两个工具：`.spv` 与 `anime4k_manifest.json` 已预编译并嵌入 `GemPrismUpscaler.Core`。
-
-## 使用
-
-启动配置界面：
-
-```bash
-dotnet run --project src/GemPrismUpscaler -c Release
-# 或
+dotnet build GemPrismUpscaler.slnx -c Release
+dotnet test  GemPrismUpscaler.slnx -c Release
 ./src/GemPrismUpscaler/bin/Release/net10.0/GemPrismUpscaler
 ```
 
-界面是左侧 5 个 Tab：
-
-- **会话**：刷新窗口列表；选择“输出显示器”（自动/指定屏）；选择“超分算法”（Anime4K S/M/L/VL、双线性、自定义 effect）；开始/停止；跟随焦点。
-- **设置**：热键、第二实例行为、关闭行为、跟随焦点、窗口列表自动刷新、托盘、默认显示器/效果/缩放、脏矩形、日志路径、开发模式；保存到 `~/.config/GemPrismUpscaler/config.toml`。
-- **Profile**：列出 `config.toml` 里的 `[[profile]]`，可打开配置文件/重新加载；选中窗口时自动套用匹配的 Profile。
-- **效果**：列出内置和自定义 effect，可打开效果目录/重新加载。
-- **日志**：运行日志、诊断错误、打开日志文件、清空显示。
-
-**配置与 Profile**：配置是 TOML，原子写入；损坏的配置会备份为 `config.toml.bad-<时间>` 并回退默认。Profile 支持 `class`（WM_CLASS）、`exe`（`/proc/<pid>/exe` 与 Wine cmdline 中的 `.exe`），按文件顺序先匹配先赢。`remember_last` 开启时会记住上次成功使用的效果/缩放/显示器。
-
-**第二实例**：默认只提示“已在运行”，不影响已有实例；设置里可改为“激活已有窗口”。第二个 `--window` CLI 仍然报错并返回非 0。KDE Wayland 下激活已有窗口使用 KWin 脚本兜底（普通 `Activate()` 在原生 Wayland 上不可靠）。
-
-**托盘**：默认启用；关闭窗口默认直接退出，可改为“最小化到托盘”；托盘不可用时强制直接退出。菜单包含显示设置、开始/停止、显示/隐藏覆盖层、退出。
-
-**自定义 effect**：把 TOML + `.spv` 放到 `~/.config/GemPrismUpscaler/effects/`，重启或点“重新加载”即可；详见 [.doc/effects.md](.doc/effects.md) 和 `examples/effects/sharpen-2x/`。
-
-命令行模式：
-
-```bash
-# 列出显示器和可捕获窗口
-./GemPrismUpscaler --list
-
-# 查询当前是否已有实例在运行
-./GemPrismUpscaler --status
-
-# 自动跟随游戏窗口所在显示器；默认 Anime4K S
-./GemPrismUpscaler --window 0x1200001 --effect anime4k-s
-
-# 质量档 M/L/VL（VL 为实验最高画质档，帧率不作为验收门槛）
-./GemPrismUpscaler --window 0x1200001 --effect anime4k-m
-./GemPrismUpscaler --window 0x1200001 --effect anime4k-l
-./GemPrismUpscaler --window 0x1200001 --effect anime4k-vl
-
-# 自定义 effect（id 来自 effect.toml）
-./GemPrismUpscaler --window 0x1200001 --effect sharpen-2x
-
-# 固定输出到某块显示器（名称来自 --list）
-./GemPrismUpscaler --window 0x1200001 --monitor HDMI-A-1
-
-# 其他
-./GemPrismUpscaler --window 0x1200001 --stretch
-./GemPrismUpscaler --window 0x1200001 --no-follow-focus
-./GemPrismUpscaler --window 0x1200001 --no-dirty-rect
-./GemPrismUpscaler --window 0x1200001 --output-size 3840x2160  # 调试/基准
-./GemPrismUpscaler --dev                                      # 强制开发模式
-./GemPrismUpscaler --version
-```
-
-`--effect anime4k` 仍作为 S 的别名，兼容 M0b/M1a 命令；`--effect` 也接受自定义 effect 的 `id`。默认保持源宽高比（fit，4:3 源会有黑边）；`--stretch` 拉伸填满。`--monitor` 省略时自动选择窗口所在显示器；窗口跨屏移动时 overlay 会跟随重建。`--output-size` 是调试/基准用的输出尺寸覆写（可大于屏幕），正常使用不要加。
-
-配置：默认 `~/.config/GemPrismUpscaler/config.toml`；`GEMPRISM_CONFIG` 可覆盖。日志：`GEMPRISM_LOG` 可覆盖配置里的日志路径；`GEMPRISM_STATS=/path/stats.csv` 会另外写每秒一行指标 CSV；`GEMPRISM_VALIDATION=1` 可在 Release 下强制打开 Vulkan 校验层；`GEMPRISM_DEV=1` 强制开发模式。
-
-日志第一行应包含：
-
-```text
-engine started version=0.3.0 effect=anime4k-s ... monitor=HDMI-A-1 ...
-```
-
-每秒的 `stats` 行示例：
-
-```text
-stats fps=59.9 captured=60 presented=60 capture=3.17/9.10ms diff=1.08/1.76ms upload=0.43/0.60ms effect=0.24/0.37ms present=0.18/0.33ms gpuUpload=0.57ms gpuEffect=1.15ms gpuTail=0.83ms cpu=16.7% gpuUtil=62% vram=4796/8188MiB ...
-```
-
-示例为真实游戏 1280×720@60 → 4K Anime4K L，显存含游戏。阶段值是 `平均/p95` 毫秒；`present` 包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；`gpu=n/a` 表示该秒没有提交帧（静止）。
-
-## 测试与基准
-
-```bash
-# 静态：期望 0 capture / 0 present
-./tools/bench-m1b.sh --effect anime4k-s --pattern static --seconds 10
-
-# 每帧重绘但像素不变：captured≈60、presented=0
-./tools/bench-m1b.sh --effect anime4k-s --pattern repaint --seconds 10
-
-# 小脏块 + 截图；再跑 --no-dirty-rect 做逐像素对比
-./tools/bench-m1b.sh --effect anime4k-s --pattern dirty --seconds 8 \
-  --screenshot .agent/shots/m1b
-
-# 全屏动画 A/B
-./tools/bench-m1b.sh --effect anime4k-s --pattern animate --seconds 10
-./tools/bench-m1b.sh --effect anime4k-s --pattern animate --seconds 10 --no-dirty-rect
-
-# S/M/L 4K 数据（真实 4K 屏用 --monitor；无 4K 屏改用 --output-size 3840x2160）
-for e in anime4k-s anime4k-m anime4k-l; do
-  ./tools/bench-m1b.sh --monitor HDMI-A-1 --effect "$e" --pattern animate --seconds 10
-done
-```
-
-`tools/testpattern` 支持 `--static`、`--dirty`、`--animate`、`--repaint`、`--popup`、`--size`。完整验收清单见 `.agent/M1b验收记录.md`。
-
-## 实现要点
-
-- **捕获**：`XShmGetImage` 直接读 client window；KWin 已做合成重定向，被遮挡窗口仍能读到自己的画面。M1b 起主路径直接从 shm 指针做分块哈希/分块上传，不再整帧拷贝到托管数组；`XGetImage` 回退仍保留。
-- **脏矩形**：64px 分块 64-bit 哈希；只上传变化块，CNN 按 manifest 的 halo 扩展后只重算这些区域；大面积变化（≥50%）回退整帧。Lanczos 写入一张持久的 4K 合成图，脏块更新后再整图 copy 到轮转的 swapchain，避免丢帧/块缝。
-- **多显示器**：用 XRandR 1.5 枚举物理像素矩形；overlay 和 Vulkan swapchain 只覆盖选中的一块屏，`DestRect` 按该屏尺寸计算，输入坐标按该屏原点换算。自动模式下窗口跨屏移动会触发 overlay/swapchain 重建。
-- **呈现**：NVIDIA Vulkan + Xlib swapchain；overlay 是 override-redirect 窗口。`--effect bilinear` 走单次 `vkCmdBlitImage`；Anime4K 走 manifest 驱动的 N-pass compute（S=5、M=9、L=10、VL=18 pass），最后用 graphics pass 做 Lanczos-2 并写入持久合成图。VL 的 push constant 为 176 B，运行时查询 `maxPushConstantsSize`，不足时隐藏/回退。
-- **指标**：CPU Stopwatch + Vulkan timestamp query（upload/effect/tail）+ NVML（整卡 GPU/显存）+ 进程 CPU；每秒输出平均/p95，并可选 CSV。
-- **输入**：overlay 接收真实鼠标，按输出内容矩形反算到源窗口坐标，再用 `XSendEvent` 发给游戏，并补发进入/离开源窗口的 crossing 事件；不使用点击穿透，也不依赖 XTest。
-- **弹窗**：轮询 `_NET_CLIENT_LIST`，发现源进程额外的 viewable 顶层窗口就隐藏 overlay；关闭后恢复并强制重绘一帧。
-- **生命周期**：源窗口最小化/unmap 时收起，恢复时重新捕获；源窗口被销毁时引擎自行停止。单实例使用 `$XDG_RUNTIME_DIR` 下的 Unix socket；退出路径覆盖窗口关闭、`SIGTERM`/`SIGINT`、游戏关闭和引擎异常。
-- **配置/Profile**：TOML 原子写入、损坏回退；Profile 按 WM_CLASS / `/proc/<pid>/exe` / Wine cmdline 匹配，先匹配先赢。
-- **自定义 effect**：TOML 描述 compute pass 图，外部 `.spv` 由 `Anime4KChain` 的通用加载路径读取；ABI 见 [.doc/effects.md](.doc/effects.md)。
-- **托盘**：Avalonia `TrayIcon`（StatusNotifierItem/AppIndicator）；不可用时自动降级。KDE Wayland 下“显示设置窗口”用 KWin 脚本兜底激活，避免 `Activate()` 在原生 Wayland 无效。
-- **开发模式**：分级日志、错误聚合、功能级/非功能级错误区分；Vulkan 校验层按 Debug/Release/开发模式/环境变量门控。
-
-## 已知限制
-
-- 脏矩形哈希在 720p 约 1 ms/帧；4K 源约 4 倍，M1b 只承诺常见 VN 分辨率。
-- 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
-- 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
-- 零拷贝：v1.0 默认走 shm；嵌套 toplevel 的 DMA-BUF、portal/PipeWire 零拷贝、非嵌套 DRI3+fence 均推迟到 v1.0 后作为可选优化。旧的“导出 + Vulkan 导入”spike 详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
-- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay + GlobalShortcuts；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；**切到其他程序不会自动收起**（M2a 用热键/托盘，M2b 解决）；完整 HDR 留到 v1.0 后。
-- **v1.0 范围**：M2b 主路径 + M3 打磨/分发；原 M2c 的嵌套 DMA-BUF 零拷贝、SDR 色彩准确性不阻塞 v1.0，作为 v1.0 后可选优化。
-- **M2bβ2 未做**：XWayland 的指针锁/raw input 没有实现，FPS/3D 鼠标视角在嵌套模式下不承诺；终末地 X11 镜头未验收。详见 [.doc/post-v1.0.md](.doc/post-v1.0.md)。
-- 混合 GL+Vulkan、跨屏连续拼接、非嵌套 X11 raw、XWayland DRI3+fence 撕裂均推迟到 v1.0 后（[.doc/post-v1.0.md](.doc/post-v1.0.md)）。
-- **M1c 不做动画**（留到 v1.0 前评估）；VL 是实验最高画质档，帧率不作为验收门槛。
-- **KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动**（DP 100% 正常）。这是 Avalonia/Wayland popup 的定位限制，M1 不处理，已记录在 [.doc/backlog.md](.doc/backlog.md) §7。
-- 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 上限 256 B（设备可能更低）。
-- M2b 按约定只做主要路径验收；完整回归/边界兼容性留到 M3/v1.0 统一进行。
+当前基线：0 warning / 0 error，测试 150/150。
 
 ## 文档
 
-- [设计文档](.doc/design.md) —— 需求、架构、技术选型、实现细节
-- [M2 计划](.doc/m2-plan.md) —— M2a/M2b/M2c 范围、实现、验收与交接
-- [M2c 资料](.doc/m2c-plan.md) —— 嵌套 DMA-BUF 零拷贝与色彩收尾（v1.0 后可选）
-- [v1.0 后功能](.doc/post-v1.0.md) —— 推迟项、已知问题与重启条件
-- [CLI 使用](.doc/cli.md) —— 命令、参数、退出码与示例
-- [路线图](.doc/roadmap.md) —— M0/M1/M2 阶段划分与验收标准
-- [兼容性](.doc/compatibility.md) —— 支持矩阵、已测试环境、已知限制
-- [功能 backlog](.doc/backlog.md) —— 未排期功能与 M1 记录项
-- [更新记录](.doc/changelog.md) —— 各版本修复、功能变更与已知限制
-- [自定义 effect ABI](.doc/effects.md) —— TOML/SPIR-V/push constant/校验规则
-- [零拷贝 spike](.doc/zero-copy-spike.md) —— DRI3/DMA-BUF 探针与 go/no-go
-- [着色器说明](shaders/README.md) —— Anime4K S/M/L/VL 来源、manifest 与重新生成方式
+| 文档 | 内容 |
+|---|---|
+| [安装](docs/install.md) | 解压、权限、首次运行、卸载 |
+| [快速开始](docs/quickstart.md) | 三分钟跑通一次超分 |
+| [使用说明](docs/usage.md) | 界面、启动方式、暂停/停止、托盘、热键 |
+| [命令行](docs/cli.md) | 参数、退出码、脚本示例 |
+| [配置](docs/configuration.md) | `config.toml`、环境变量、Profile 现状 |
+| [兼容性](docs/compatibility.md) | 支持矩阵、已验证环境、性能参考 |
+| [常见问题](docs/troubleshooting.md) | 黑屏、启动失败、输入异常、诊断 |
+| [已知问题](docs/known-issues.md) | v1.0 不解决的问题与规避 |
+| [更新记录](docs/release-notes.md) | v1.0.0 与历史版本摘要 |
+| [示例](docs/examples/README.md) | 配置、Lutris 脚本、自定义 effect |
+| [开发文档](docs/dev/README.md) | 架构、路线图、诊断、测试、发布清单 |
+| [历史资料](docs/dev/history/README.md) | M0–M3 技术记录与归档 |
 
-## 致谢
+## 实现要点
 
-本项目在架构上参考了 [Magpie](https://github.com/Blinue/Magpie) 的 effect 管线设计，超分算法来自 [Anime4K](https://github.com/bloc97/Anime4K)，几何模型借鉴了 Magpie 的 `ScalingType` 方案。
+- **嵌套合成器**：私有 sway + headless 单输出，按目标显示器物理分辨率/刷新率创建；`ext-image-copy-capture` 按 toplevel 抓帧。
+- **宿主窗口**：原生 Wayland `xdg_toplevel`，装饰、viewport、分数缩放；对话框独立宿主；关闭请求转发给游戏窗口。
+- **超分**：Vulkan compute；Anime4K S/M/L/VL 由 manifest 驱动 N-pass，Lanczos-2 收尾；双线性单次 blit。
+- **脏矩形**：64px 分块哈希 + CNN halo，静止画面不重复捕获/呈现。
+- **输入**：嵌套内虚拟指针/键盘；X11/XWayland 窗口用坐标反算 + `XSendEvent`；原生 Wayland 全屏用输入穿透。
+- **诊断**：session header、5 MB × 3 日志轮转、脱敏诊断包、崩溃快照。
 
 ## 许可证
 
 GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
+
+第三方组件与参考项目见 [docs/dev/third-party.md](docs/dev/third-party.md)。架构参考 [Magpie](https://github.com/Blinue/Magpie)，超分算法来自 [Anime4K](https://github.com/bloc97/Anime4K)。

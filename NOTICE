@@ -7,9 +7,14 @@ FSR 着色器尚未包含在本版本中（计划为后续版本，AMD FidelityF
 
 第三方依赖：
 - Avalonia / Avalonia.Wayland：MIT
+- Avalonia.Fonts.Inter：Inter 字体，SIL OFL 1.1
 - Silk.NET：MIT
 - .NET：MIT
-- Tomlyn：MIT
+- CommunityToolkit.Mvvm：MIT
+- Tomlyn：BSD-2-Clause
+- NWayland / NWayland.Protocols.Wlr：MIT
+- Tmds.DBus.Protocol：MIT
+- sway / wlroots：MIT
 - Anime4K：MIT
 - Magpie：GPL-3.0（仅参考设计，未复制代码）
 

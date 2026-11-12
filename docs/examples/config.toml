@@ -1,0 +1,75 @@
+# GemPrismUpscaler v1.0 配置示例。
+# 路径：~/.config/GemPrismUpscaler/config.toml
+# 修改后运行：./GemPrismUpscaler --config-check
+
+schema = 1
+
+[general]
+# 再开一个 GUI 时：notify = 弹窗提示，activate = 激活已有窗口
+second_instance = "notify"
+# 关闭主窗口：exit = 直接退出，tray = 最小化到托盘
+close_action = "exit"
+follow_focus = true
+remember_last = true
+auto_refresh_windows = true
+refresh_interval_ms = 1000
+
+[hotkey]
+# v1.0 固定值，暂不支持修改
+toggle_overlay = "Alt+Shift+A"
+
+[logging]
+# 空字符串 = ~/.local/share/GemPrismUpscaler/app.log
+path = ""
+# debug / info / warn / error / off
+level = "info"
+
+[display]
+# auto 或 --list 里的显示器名称
+monitor = "auto"
+
+[effect]
+# anime4k-s / anime4k-m / anime4k-l / anime4k-vl / bilinear
+default = "anime4k-s"
+# fit = 保持比例留黑边，stretch = 拉伸铺满
+scaling = "fit"
+dirty_rect = true
+
+[capture]
+# 高级：正常使用保持 auto
+backend = "auto"
+mode = "auto"
+
+[tray]
+enabled = true
+
+[input]
+# v1.0 只支持 2d；fps/raw 未实现
+mode = "2d"
+pointer_mode = "auto"
+
+[diagnostics]
+developer_mode = false
+
+[nested]
+# GUI“嵌套启动”使用的命令；按 argv 解析，不经过 shell。
+# 使用前请完全退出 Lutris（包括托盘）。
+command = "env LUTRIS_SKIP_INIT=1 lutris lutris:rungameid/3"
+
+[last]
+# 由“记住上次选择”自动维护，通常不需要手改
+effect = "anime4k-s"
+scaling = "fit"
+monitor = "auto"
+
+# Profile 片段示例；v1.0 不会自动套用。
+# [[profile]]
+# name = "visual-novel"
+# class = ["game-class*"]
+# exe = ["game.exe"]
+# effect = "anime4k-m"
+# scaling = "fit"
+# monitor = "auto"
+# follow_focus = true
+# dirty_rect = true
+# hotkey = "Alt+Shift+A"

@@ -4,7 +4,7 @@
 #
 # The patch only exposes the client-requested pointer warp over sway's IPC
 # (get_seats: cursor_hint_seq/x/y); the nested host uses it to rebase its
-# relative pointer stream. See .doc/pointer-warp.md.
+# relative pointer stream. See docs/dev/history/pointer-warp.md.
 #
 # Requirements: git, patch, meson, ninja, wlroots-0.20 and sway build deps.
 # meson/ninja can come from a venv:

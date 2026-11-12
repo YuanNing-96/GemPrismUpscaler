@@ -30,4 +30,4 @@ cc -O2 -o dri3-vulkan-import dri3-vulkan-import.c \
 - `tools/testpattern --static` 的软件窗口：2 fd、NVIDIA DCC modifier `0x20000000056bb03`；旧的
   `DRI3BufferFromPixmap` 失败；线性导入路径不适用。
 
-结论与限制见 [.doc/zero-copy-spike.md](../../.doc/zero-copy-spike.md)。
+结论与限制见 [docs/dev/history/zero-copy-spike.md](../../docs/dev/history/zero-copy-spike.md)。

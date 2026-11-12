@@ -1,0 +1,20 @@
+# Profile 片段示例。
+#
+# v1.0 不会根据窗口自动套用 Profile；这些字段保留给后续版本。
+# 想使用时，把 [[profile]] 段追加到 ~/.config/GemPrismUpscaler/config.toml 末尾，
+# 不要用本文件覆盖完整配置。
+
+schema = 1
+
+[[profile]]
+name = "visual-novel"
+# WM_CLASS 匹配，支持 * 和 ?
+class = ["game-class*"]
+# /proc/<pid>/exe 或 Wine 命令行里的 .exe 名
+exe = ["game.exe"]
+effect = "anime4k-m"
+scaling = "fit"
+monitor = "auto"
+follow_focus = true
+dirty_rect = true
+hotkey = "Alt+Shift+A"
