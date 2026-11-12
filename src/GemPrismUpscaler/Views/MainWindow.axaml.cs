@@ -751,6 +751,7 @@ public partial class MainWindow : Window
             try
             {
                 shell.Start();
+                shell.StartCommand();
                 nested.Start();
                 Dispatcher.UIThread.Post(() =>
                 {
