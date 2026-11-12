@@ -99,7 +99,10 @@ public sealed class NestedUpscaleSession : IDisposable
         _monitorName = monitorName;
         _waitForCommand = waitForCommand;
         _preferredMain = preferredMain;
-        _toplevelMode = Environment.GetEnvironmentVariable("GEMPRISM_TOPLEVEL_CAPTURE") is "1" or "true";
+        // v1.0 main path: per-toplevel capture is the default. Set
+        // GEMPRISM_TOPLEVEL_CAPTURE=0 to fall back to the legacy output crop.
+        _toplevelMode = Environment.GetEnvironmentVariable("GEMPRISM_TOPLEVEL_CAPTURE")
+            ?.ToLowerInvariant() is not ("0" or "false");
         _waylandHost = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")) &&
                        Environment.GetEnvironmentVariable("GEMPRISM_HOST_X11") is not ("1" or "true");
         _thread = new Thread(Run) { IsBackground = true, Name = "nested-upscale" };

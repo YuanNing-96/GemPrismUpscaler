@@ -21,6 +21,10 @@ GemPrismUpscaler --window 0x1200001
 # 查询运行中的实例
 GemPrismUpscaler --status
 
+# 环境检查 / 配置检查
+GemPrismUpscaler --doctor
+GemPrismUpscaler --config-check
+
 # 版本/帮助
 GemPrismUpscaler --version
 GemPrismUpscaler --help
@@ -41,6 +45,8 @@ GUI 与 CLI 共用单实例约束：默认第二个 GUI 只提示“已在运行
 | 参数 | 说明 |
 |---|---|
 | `--dev` | 强制开发模式：详细日志、非功能级错误提示、Vulkan 校验层（按配置） |
+| `--doctor` | 检查 KDE/Wayland/XWayland、sway/swaymsg、shim、vkeyboard、Vulkan、配置/日志；有阻塞项返回 3 |
+| `--config-check` | 只加载配置并打印路径/schema/警告/错误，不启动会话 |
 | `--help` | 打印用法 |
 | `--version` | 打印版本 |
 
@@ -53,6 +59,7 @@ GUI 与 CLI 共用单实例约束：默认第二个 GUI 只提示“已在运行
 | `GEMPRISM_DEV=1` | 等价 `--dev` |
 | `GEMPRISM_VALIDATION=1` | 强制开启 Vulkan 校验层 |
 | `GEMPRISM_STATS=/path/stats.csv` | 输出逐帧指标 CSV |
+| `GEMPRISM_TOPLEVEL_CAPTURE=0` | 关闭按 toplevel 抓取，回退旧输出裁剪路径（默认开启） |
 
 ---
 
@@ -203,7 +210,7 @@ GemPrismUpscaler --portal-window --monitor HDMI-A-1 --portal-reuse-token
 ## 7. M2b 嵌套命令（已实现，单输出路线）
 
 > `--monitor` 必填；嵌套桌面按该显示器的物理分辨率/刷新率快照。`--nested-size` 已废弃，
-> 传入会被忽略。`GEMPRISM_TOPLEVEL_CAPTURE=1` 可显式启用按 toplevel 抓取（当前主路径）。
+> 传入会被忽略。按 toplevel 抓取是默认主路径；`GEMPRISM_TOPLEVEL_CAPTURE=0` 可回退旧输出裁剪。
 
 ```bash
 # 启动一个游戏/启动器到私有嵌套合成器
@@ -230,3 +237,15 @@ Lutris 推荐用 per-game 环境变量/wrapper，把 `WAYLAND_DISPLAY`/`DISPLAY`
 - **画面静止时 fps 为 0**：预期行为；脏矩形/静止画面不重复 capture/present。
 - **4K 输出 fps 低**：先确认源窗口是否 GPU 更新（XShm 捕获可能慢）、是否开启 HDR/高刷、是否使用 VL 等重 effect；用 `--output-size` 和 `GEMPRISM_STATS` 排查。
 - **第二实例**：默认只提示错误；设置可改为激活已有 GUI；第二个 CLI 仍返回 4。
+
+---
+
+## 9. 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功（`--help`/`--version`/`--doctor` 无阻塞/`--config-check` 无错误/会话正常退出） |
+| 1 | 运行或配置失败 |
+| 2 | 参数/用法错误 |
+| 3 | 依赖或环境检查失败（`--doctor`） |
+| 4 | 已有实例在运行（第二实例） |

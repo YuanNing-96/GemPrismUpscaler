@@ -49,6 +49,7 @@ public static class ConfigStore
         ["tray"] = new(StringComparer.Ordinal) { "enabled" },
         ["input"] = new(StringComparer.Ordinal) { "mode", "pointer_mode" },
         ["diagnostics"] = new(StringComparer.Ordinal) { "developer_mode" },
+        ["nested"] = new(StringComparer.Ordinal) { "command" },
         ["last"] = new(StringComparer.Ordinal) { "effect", "scaling", "monitor" },
         ["profile"] = new(StringComparer.Ordinal)
         {

@@ -101,7 +101,7 @@ public sealed class VirtualKeyboard : IDisposable
         }
     }
 
-    private static string? ResolvePath()
+    public static string? ResolvePath()
     {
         string? env = Environment.GetEnvironmentVariable("GEMPRISM_VKEYBOARD");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;

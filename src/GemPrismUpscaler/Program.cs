@@ -54,6 +54,7 @@ sealed class Program
                                 args[0] == "--portal-window" || args[0] == "--portal-monitor" ||
                                 args[0] == "--nested" || args[0] == "--nested-session" ||
                                 args[0] == "--nested-probe" ||
+                                args[0] == "--doctor" || args[0] == "--config-check" ||
                                 args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
@@ -135,6 +136,11 @@ sealed class Program
                 PrintUsage();
                 return 0;
             }
+
+            if (args[0] == "--config-check")
+                return RunConfigCheck();
+            if (args[0] == "--doctor")
+                return RunDoctor();
 
             if (args[0] == "--nested")
                 return RunNested(args);
@@ -642,7 +648,10 @@ sealed class Program
                                                         run a command in private nested sway
               GemPrismUpscaler --nested-session [options]
                                                         keep a nested session for gemprism-nested-run
+              GemPrismUpscaler --nested-probe [options] probe nested outputs/windows
               GemPrismUpscaler --status                 query the running instance
+              GemPrismUpscaler --doctor                 check the KDE/Wayland/nested runtime
+              GemPrismUpscaler --config-check           load config and print warnings
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
 
@@ -679,6 +688,17 @@ sealed class Program
               --nested-size <WxH>       deprecated/ignored; nested desktop follows monitor
               --effect <id>             built-in or custom effect
               --stretch                 stretch instead of preserving aspect ratio
+
+            options for --nested-probe:
+              --monitor <name>          monitor whose mode the probe reports
+              --sway <path>             override the pinned sway binary
+
+            exit codes:
+              0  success
+              1  runtime/config failure
+              2  invalid usage
+              3  dependency/environment check failed (--doctor)
+              4  another instance is running
             """);
     }
 
@@ -802,6 +822,202 @@ sealed class Program
         catch
         {
             // notify-send is optional; the error window remains.
+        }
+    }
+
+    private static int RunConfigCheck()
+    {
+        var result = ConfigStore.Load();
+        Console.WriteLine($"config: {result.Path}");
+        Console.WriteLine($"existed: {(result.FileExisted ? "yes" : "no")} " +
+                          $"recovered: {(result.RecoveredFromError ? "yes" : "no")}");
+        if (!string.IsNullOrWhiteSpace(result.Error))
+            Console.WriteLine($"error: {result.Error}");
+        foreach (string warning in result.Warnings)
+            Console.WriteLine($"warning: {warning}");
+        Console.WriteLine($"schema: {result.Config.Schema}");
+        Console.WriteLine($"effects: {result.Config.Effect.Default} scaling={result.Config.Effect.Scaling}");
+        Console.WriteLine($"nested command: {(string.IsNullOrWhiteSpace(result.Config.Nested.Command) ? "(empty)" : result.Config.Nested.Command)}");
+        return string.IsNullOrWhiteSpace(result.Error) ? 0 : 1;
+    }
+
+    private static int RunDoctor()
+    {
+        int failed = 0;
+        int warned = 0;
+
+        void Ok(string text) => Console.WriteLine($"[ OK ] {text}");
+        void Warn(string text) { warned++; Console.WriteLine($"[WARN] {text}"); }
+        void Fail(string text) { failed++; Console.WriteLine($"[FAIL] {text}"); }
+
+        Console.WriteLine($"GemPrismUpscaler doctor v{AppInfo.Version}");
+        Console.WriteLine($"session: {Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "-"} " +
+                          $"desktop={Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? "-"}");
+
+        string desktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? string.Empty;
+        string sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? string.Empty;
+        if (desktop.Contains("KDE", StringComparison.OrdinalIgnoreCase))
+            Ok("KDE desktop detected");
+        else
+            Fail("v1.0 only supports KDE Plasma; XDG_CURRENT_DESKTOP does not contain KDE");
+        if (sessionType.Equals("wayland", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
+            Ok("Wayland session detected");
+        else
+            Fail("Wayland session not detected (v1.0 requires KDE Wayland)");
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DISPLAY")))
+            Warn("DISPLAY is empty; XWayland is required for nested X11 games and monitor enumeration");
+        else
+            Ok("XWayland DISPLAY detected");
+
+        var config = ConfigStore.Load();
+        if (string.IsNullOrWhiteSpace(config.Error))
+            Ok($"config readable: {config.Path}");
+        else
+            Fail($"config error: {config.Error}");
+        foreach (string warning in config.Warnings)
+            Warn($"config: {warning}");
+
+        try
+        {
+            string logPath = Log.Path;
+            string? logDir = Path.GetDirectoryName(logPath);
+            if (!string.IsNullOrWhiteSpace(logDir)) Directory.CreateDirectory(logDir);
+            string probe = logPath + ".doctor";
+            File.WriteAllText(probe, "probe");
+            File.Delete(probe);
+            Ok($"log path writable: {logPath}");
+        }
+        catch (Exception ex)
+        {
+            Fail($"log path is not writable: {ex.Message}");
+        }
+
+        string sway = NestedSession.ResolveSwayPath();
+        string? swayExe = FindExecutable(sway);
+        if (swayExe is null)
+            Fail($"sway not found: {sway}");
+        else
+        {
+            var version = RunTool(swayExe, "--version");
+            if (version.Ok) Ok($"sway: {version.Text}");
+            else Fail($"sway --version failed: {version.Text}");
+        }
+
+        string? swayMsg = NestedSession.ResolveSwayMsgPath();
+        string? swayMsgExe = swayMsg is null ? FindExecutable("swaymsg") : FindExecutable(swayMsg);
+        if (swayMsgExe is null)
+            Fail("swaymsg not found");
+        else
+            Ok($"swaymsg: {swayMsgExe}");
+
+        string? shim = NestedSession.ResolveDecorationShimPath(swayExe);
+        if (shim is null)
+            Warn("xdg-decoration-v2-shim.so not found; Wine may draw its own titlebar");
+        else
+            Ok($"decoration shim: {shim}");
+
+        string? vkeyboard = VirtualKeyboard.ResolvePath();
+        if (vkeyboard is null)
+            Warn("gemprism-vkeyboard not found; native Wayland keyboard input will be limited");
+        else
+            Ok($"virtual keyboard: {vkeyboard}");
+
+        try
+        {
+            var nodes = Directory.Exists("/dev/dri")
+                ? Directory.GetFiles("/dev/dri", "renderD*")
+                : Array.Empty<string>();
+            if (nodes.Length == 0)
+                Fail("no /dev/dri/renderD* node found");
+            else
+                Ok($"render nodes: {string.Join(", ", nodes.Select(Path.GetFileName))}");
+        }
+        catch (Exception ex)
+        {
+            Warn($"render node check failed: {ex.Message}");
+        }
+
+        string? vulkanInfo = FindExecutable("vulkaninfo");
+        if (vulkanInfo is null)
+            Warn("vulkaninfo not found; cannot verify the Vulkan device/driver (the app will still try)");
+        else
+        {
+            var info = RunTool(vulkanInfo, "--summary");
+            if (info.Ok && info.Text.Contains("deviceName", StringComparison.OrdinalIgnoreCase))
+                Ok("vulkaninfo reports a Vulkan device");
+            else
+                Warn($"vulkaninfo check inconclusive: {info.Text}");
+        }
+
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DISPLAY")))
+        {
+            Warn("skipping X11 monitor enumeration because DISPLAY is empty");
+        }
+        else
+        {
+            try
+            {
+                using var display = new X11Display();
+                var monitors = X11MonitorEnumerator.List(display);
+                if (monitors.Count == 0)
+                    Fail("no XRandR monitor found");
+                else
+                    Ok($"monitors: {string.Join(", ", monitors.Select(m => $"{m.Name}:{m.Width}x{m.Height}"))}");
+            }
+            catch (Exception ex)
+            {
+                Fail($"X11 monitor enumeration failed: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine($"result: {(failed == 0 ? "PASS" : "FAIL")} ({failed} failed, {warned} warnings)");
+        return failed == 0 ? 0 : 3;
+    }
+
+    private static string? FindExecutable(string? nameOrPath)
+    {
+        if (string.IsNullOrWhiteSpace(nameOrPath)) return null;
+        if (nameOrPath.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            return File.Exists(nameOrPath) ? Path.GetFullPath(nameOrPath) : null;
+
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        foreach (string dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string candidate = Path.Combine(dir, nameOrPath);
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private static (bool Ok, string Text) RunTool(string path, params string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(path)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            foreach (string arg in args) psi.ArgumentList.Add(arg);
+            using var process = Process.Start(psi);
+            if (process is null) return (false, "process did not start");
+            if (!process.WaitForExit(3000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return (false, "timeout");
+            }
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            string error = process.StandardError.ReadToEnd().Trim();
+            string text = string.IsNullOrWhiteSpace(output) ? error : output;
+            return (process.ExitCode == 0, text.Replace('\n', ' ').Replace('\r', ' '));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
         }
     }
 

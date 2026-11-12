@@ -1,11 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using GemPrismUpscaler.Core.Configuration;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Engine;
 using GemPrismUpscaler.Core.Geometry;
 using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Nested;
 using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Core.Platform.Linux.X11;
 using GemPrismUpscaler.Core.Rendering;
@@ -26,6 +28,10 @@ public partial class MainWindow : Window
     private AppConfig _config;
     private UpscaleSession? _session;
     private PortalUpscaleSession? _portalSession;
+    private NestedSession? _nestedShell;
+    private NestedUpscaleSession? _nestedUpscale;
+    private bool _nestedStarting;
+    private string? _nestedMonitorName;
     private List<WindowInfo> _windows = new();
     private List<MonitorInfo> _monitors = new();
     private string _runningTitle = string.Empty;
@@ -55,6 +61,16 @@ public partial class MainWindow : Window
         }
 
         Title = $"宝石棱镜 {AppInfo.DisplayName}";
+        try
+        {
+            using var iconStream = AssetLoader.Open(
+                new Uri("avares://GemPrismUpscaler/Assets/gemprism.png"));
+            Icon = new WindowIcon(iconStream);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"window icon asset missing: {ex.Message}");
+        }
         PopulateEffectCombos();
         ApplyConfigDefaults();
         LoadSettingsIntoControls();
@@ -101,6 +117,7 @@ public partial class MainWindow : Window
     {        RefreshButton.Click += (_, _) => RefreshWindows();
         StartButton.Click += (_, _) => StartSession();
         PortalButton.Click += (_, _) => StartPortalSession();
+        NestedStartButton.Click += (_, _) => StartNestedSession();
         StopButton.Click += (_, _) => StopSession("已停止");
         ExitButton.Click += (_, _) =>
         {
@@ -191,6 +208,7 @@ public partial class MainWindow : Window
     private void LoadSettingsIntoControls()
     {
         HotkeyBox.Text = _config.Hotkey.ToggleOverlay;
+        NestedCommandBox.Text = _config.Nested.Command;
         SecondInstanceCombo.SelectedIndex =
             string.Equals(_config.General.SecondInstance, "activate", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         CloseActionCombo.SelectedIndex =
@@ -317,6 +335,7 @@ public partial class MainWindow : Window
         _config.Effect.DirtyRect = DirtyRectCheck.IsChecked != false;
         _config.Logging.Path = logPath;
         _config.Diagnostics.DeveloperMode = DeveloperModeCheck.IsChecked == true;
+        _config.Nested.Command = (NestedCommandBox.Text ?? string.Empty).Trim();
 
         MergeProfilesFromDisk();
         try
@@ -475,8 +494,9 @@ public partial class MainWindow : Window
         Environment.ProcessId,
         "gui",
         _instance?.StartedAt ?? DateTimeOffset.Now,
-        _session?.IsRunning == true || _portalSession?.IsRunning == true,
-        _session?.MonitorName ?? _portalSession?.OverlayDescription);
+        _session?.IsRunning == true || _portalSession?.IsRunning == true ||
+        _nestedUpscale?.IsRunning == true,
+        _session?.MonitorName ?? _portalSession?.OverlayDescription ?? _nestedMonitorName);
 
     private void RefreshWindows(bool quiet = false)
     {
@@ -619,6 +639,143 @@ public partial class MainWindow : Window
         if (match is not null) MonitorCombo.SelectedItem = match;
     }
 
+    private void StartNestedSession()
+    {
+        if (_nestedStarting || _nestedUpscale is not null || _nestedShell is not null)
+            return;
+
+        string commandText = (NestedCommandBox.Text ?? string.Empty).Trim();
+        if (commandText.Length == 0)
+        {
+            ErrorBus.Functional("nested", "请先填写嵌套启动命令");
+            StatusText.Text = "嵌套命令为空";
+            return;
+        }
+
+        string[] command;
+        try
+        {
+            command = NestedCommandLine.Split(commandText);
+        }
+        catch (FormatException ex)
+        {
+            ErrorBus.Functional("nested", $"嵌套命令格式错误：{ex.Message}");
+            return;
+        }
+        if (command.Length == 0)
+        {
+            ErrorBus.Functional("nested", "嵌套命令为空");
+            return;
+        }
+
+        var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
+        var effect = EffectCombo.SelectedItem as EffectDefinition
+                     ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
+        if (!effect.IsAvailable)
+        {
+            ErrorBus.Functional("effect", $"效果“{effect.DisplayName}”不可用：{effect.UnavailableReason}");
+            return;
+        }
+
+        string? monitorName = (MonitorCombo.SelectedItem as MonitorChoice)?.Name;
+        if (string.Equals(monitorName, "auto", StringComparison.OrdinalIgnoreCase))
+            monitorName = null;
+
+        NestedMonitorInfo monitor;
+        try
+        {
+            monitor = NestedMonitor.Resolve(monitorName);
+        }
+        catch (Exception ex)
+        {
+            ErrorBus.Functional("nested", "无法解析嵌套显示器", ex);
+            return;
+        }
+
+        string swayPath = NestedSession.ResolveSwayPath();
+        string? swayMsgPath = NestedSession.ResolveSwayMsgPath();
+        NestedSession shell;
+        NestedUpscaleSession nested;
+        try
+        {
+            shell = new NestedSession(swayPath, command, monitor.Width, monitor.Height,
+                swayMsgPath, refreshMilliHz: monitor.RefreshMilliHz);
+            nested = new NestedUpscaleSession(shell, mode, effect, monitor.Name,
+                waitForCommand: true);
+        }
+        catch (Exception ex)
+        {
+            ErrorBus.Functional("nested", "创建嵌套会话失败", ex);
+            return;
+        }
+
+        _config.Nested.Command = commandText;
+        try { ConfigStore.Save(_config); } catch (Exception ex) { Log.Warn($"nested command save failed: {ex.Message}"); }
+
+        nested.Message += OnSessionMessage;
+        _nestedShell = shell;
+        _nestedUpscale = nested;
+        _nestedMonitorName = monitor.Name;
+        _nestedStarting = true;
+        _runningTitle = "嵌套会话";
+        StartButton.IsEnabled = false;
+        PortalButton.IsEnabled = false;
+        NestedStartButton.IsEnabled = false;
+        StopButton.IsEnabled = true;
+        StatusText.Text = $"正在启动嵌套会话：{monitor.Name} {monitor.Width}x{monitor.Height}…";
+        AppendLog($"nested start: monitor={monitor.Name} size={monitor.Width}x{monitor.Height} " +
+                  $"effect={effect.Id} command={commandText}");
+
+        Task.Run(() =>
+        {
+            try
+            {
+                shell.Start();
+                nested.Start();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(_nestedUpscale, nested))
+                    {
+                        try { nested.Stop(); } catch { }
+                        try { nested.Dispose(); } catch { }
+                        try { shell.Stop(); } catch { }
+                        try { shell.Dispose(); } catch { }
+                        return;
+                    }
+                    _nestedStarting = false;
+                    StatusText.Text = $"运行中：嵌套（{monitor.Name}，{effect.DisplayName}）";
+                    AppendLog("nested session started");
+                    UpdateTrayState();
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (ReferenceEquals(_nestedUpscale, nested))
+                    {
+                        _nestedUpscale = null;
+                        _nestedShell = null;
+                        _nestedMonitorName = null;
+                        _nestedStarting = false;
+                        _runningTitle = string.Empty;
+                        StartButton.IsEnabled = true;
+                        PortalButton.IsEnabled = true;
+                        NestedStartButton.IsEnabled = true;
+                        StopButton.IsEnabled = false;
+                        StatusText.Text = "嵌套会话启动失败";
+                    }
+                    AppendLog($"nested start error: {ex.Message}");
+                    ErrorBus.Functional("nested", "嵌套会话启动失败", ex);
+                    try { nested.Message -= OnSessionMessage; } catch { }
+                    try { nested.Dispose(); } catch { }
+                    try { shell.Stop(); } catch { }
+                    try { shell.Dispose(); } catch { }
+                });
+            }
+        });
+    }
+
     private void StartPortalSession()
     {
         StopSession("切换为 Wayland 门户");
@@ -642,6 +799,7 @@ public partial class MainWindow : Window
         _runningTitle = "Wayland 窗口";
         StartButton.IsEnabled = false;
         PortalButton.IsEnabled = false;
+        NestedStartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
         StatusText.Text = "请在系统对话框中选择要共享的窗口…";
         AppendLog("portal: waiting for system window picker");
@@ -669,6 +827,7 @@ public partial class MainWindow : Window
                         _runningTitle = string.Empty;
                         StartButton.IsEnabled = true;
                         PortalButton.IsEnabled = true;
+                        NestedStartButton.IsEnabled = true;
                         StopButton.IsEnabled = false;
                         StatusText.Text = "Wayland 门户启动失败";
                     }
@@ -731,6 +890,7 @@ public partial class MainWindow : Window
             _session = session;
             _runningTitle = info.Title;
             StartButton.IsEnabled = false;
+            NestedStartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
             StatusText.Text = $"运行中：{_runningTitle}（显示器：{session.MonitorName}，{hotkey} 显示/隐藏）";
             AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} " +
@@ -788,6 +948,25 @@ public partial class MainWindow : Window
 
     private void StopSession(string? status = null)
     {
+        var nested = _nestedUpscale;
+        _nestedUpscale = null;
+        var nestedShell = _nestedShell;
+        _nestedShell = null;
+        _nestedMonitorName = null;
+        _nestedStarting = false;
+        if (nested is not null)
+        {
+            nested.Message -= OnSessionMessage;
+            AppendLog($"stopping nested session ({status ?? "requested"})");
+            try { nested.Stop(); } catch (Exception ex) { AppendLog($"nested stop error: {ex.Message}"); }
+            nested.Dispose();
+        }
+        if (nestedShell is not null)
+        {
+            try { nestedShell.Stop(); } catch (Exception ex) { AppendLog($"nested shell stop error: {ex.Message}"); }
+            nestedShell.Dispose();
+        }
+
         var portal = _portalSession;
         _portalSession = null;
         if (portal is not null)
@@ -810,6 +989,7 @@ public partial class MainWindow : Window
         }
         StartButton.IsEnabled = true;
         PortalButton.IsEnabled = true;
+        NestedStartButton.IsEnabled = true;
         StopButton.IsEnabled = false;
         if (StatusText is not null) StatusText.Text = status ?? "已停止";
         UpdateTrayState();
@@ -817,6 +997,24 @@ public partial class MainWindow : Window
 
     private void WatchSession()
     {
+        var nested = _nestedUpscale;
+        if (nested is not null)
+        {
+            if (_nestedStarting) return;
+            if (nested.IsRunning)
+            {
+                string text = $"运行中：嵌套（{_nestedMonitorName ?? "?"}，{nested.EffectName}）";
+                if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
+                    StatusText.Text = text;
+                return;
+            }
+            string? nestedReason = nested.ExitReason;
+            StopSession(string.IsNullOrWhiteSpace(nestedReason) ? "嵌套会话已停止"
+                : $"已停止：{ChineseReason(nestedReason)}");
+            return;
+        }
+        if (_nestedStarting) return;
+
         var portal = _portalSession;
         if (portal is not null)
         {

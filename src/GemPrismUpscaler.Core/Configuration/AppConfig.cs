@@ -19,6 +19,7 @@ public sealed class AppConfig
     public TrayConfig Tray { get; set; } = new();
     public InputConfig Input { get; set; } = new();
     public DiagnosticsConfig Diagnostics { get; set; } = new();
+    public NestedConfig Nested { get; set; } = new();
     public LastConfig Last { get; set; } = new();
 
     /// <summary>TOML array of tables: [[profile]]</summary>
@@ -49,6 +50,7 @@ public sealed class AppConfig
         Tray ??= new TrayConfig();
         Input ??= new InputConfig();
         Diagnostics ??= new DiagnosticsConfig();
+        Nested ??= new NestedConfig();
         Last ??= new LastConfig();
         Profile ??= new List<ProfileConfig>();
 
@@ -85,6 +87,8 @@ public sealed class AppConfig
             "2d", "fps", "2d", warnings, "input.mode");
         Input.PointerMode = NormalizeChoice(Input.PointerMode,
             new[] { "auto", "passthrough", "forward" }, "auto", warnings, "input.pointer_mode");
+
+        Nested.Command = Nested.Command?.Trim() ?? string.Empty;
 
         if (Diagnostics.DeveloperMode)
             Logging.Level = "debug";
@@ -217,6 +221,12 @@ public sealed class InputConfig
 public sealed class DiagnosticsConfig
 {
     public bool DeveloperMode { get; set; }
+}
+
+public sealed class NestedConfig
+{
+    /// <summary>Command line launched by the GUI nested button; argv is parsed without a shell.</summary>
+    public string Command { get; set; } = string.Empty;
 }
 
 public sealed class LastConfig
