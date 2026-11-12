@@ -129,7 +129,28 @@ public sealed class NestedUpscaleSession : IDisposable
     public void RequestToggleUpscale()
     {
         long id = Interlocked.Read(ref _focusedId);
+        bool known;
+        lock (_stateGate)
+            known = id != 0 && _states.TryGetValue(id, out var focused) &&
+                    focused.Host is not null && !focused.IsDialog && !focused.Ignored;
+
+        if (!known)
+        {
+            // The GUI button has no key event to tell it which window is
+            // focused. Fall back to the first non-dialog host so "continue"
+            // works even if focus tracking has not reported an id yet.
+            lock (_stateGate)
+            {
+                var state = _states.Values.FirstOrDefault(s =>
+                                s.Host is not null && !s.IsDialog && !s.Ignored)
+                            ?? _states.Values.FirstOrDefault(s => s.Host is not null);
+                if (state is null) return;
+                id = state.Id;
+            }
+        }
+
         if (id == 0) return;
+        Log.Info($"nested toggle requested id={id}");
         Interlocked.Exchange(ref _toggleRequestedId, id);
         Interlocked.Exchange(ref _toggleRequested, 1);
     }
