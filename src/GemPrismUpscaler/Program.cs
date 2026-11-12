@@ -34,6 +34,7 @@ sealed class Program
             if (e.ExceptionObject is Exception ex)
             {
                 Log.Error("unhandled exception", ex);
+                try { DiagnosticsPackage.WriteCrashSnapshot(ex); } catch { }
                 ErrorBus.Functional("app", "程序出现未处理异常", ex);
             }
         };

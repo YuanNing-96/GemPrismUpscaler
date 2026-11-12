@@ -189,12 +189,62 @@ public static class DiagnosticsPackage
             text.AppendLine("[stale nested directories]");
             foreach (string dir in Directory.GetDirectories(tmp, "gemprism-nested-*"))
                 text.AppendLine(Redact(dir));
+
+            text.AppendLine();
+            text.AppendLine("[latest nested sway stderr]");
+            var logs = Directory.GetFiles(tmp, "gemprism-sway-*.log")
+                .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
+                .Take(1)
+                .ToArray();
+            if (logs.Length == 0)
+            {
+                text.AppendLine("(none)");
+            }
+            else
+            {
+                text.AppendLine(Redact(logs[0]));
+                string tail = ReadTail(logs[0], 256 * 1024);
+                text.AppendLine(Redact(tail));
+            }
         }
         catch (Exception ex)
         {
             text.AppendLine($"stale scan failed: {ex.Message}");
         }
         File.WriteAllText(path, text.ToString(), new UTF8Encoding(false));
+    }
+
+    public static string WriteCrashSnapshot(Exception exception)
+    {
+        string dir = Path.Combine(AppPaths.ConfigDirectory, "diagnostics");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+        string text = $"GemPrismUpscaler {AppInfo.DisplayName}\n" +
+                      $"time={DateTimeOffset.Now:O}\n" +
+                      $"pid={Environment.ProcessId}\n" +
+                      $"cwd={Redact(Environment.CurrentDirectory)}\n" +
+                      $"session={Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") ?? "-"} " +
+                      $"desktop={Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? "-"}\n" +
+                      $"wayland={Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") ?? "-"} " +
+                      $"display={Environment.GetEnvironmentVariable("DISPLAY") ?? "-"}\n\n" +
+                      Redact(exception.ToString());
+        File.WriteAllText(path, text, new UTF8Encoding(false));
+        return path;
+    }
+
+    private static string ReadTail(string path, int maxBytes)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (stream.Length > maxBytes) stream.Seek(-maxBytes, SeekOrigin.End);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (Exception ex)
+        {
+            return $"# failed to read {Redact(path)}: {ex.Message}";
+        }
     }
 
     private static string Readme()
