@@ -35,6 +35,7 @@
 | `--nested --monitor <name> -- <命令>` | 在私有嵌套合成器里启动游戏/启动器 |
 | `--doctor` | 检查运行环境是否有阻塞问题 |
 | `--config-check` | 检查配置文件是否可读、是否有警告 |
+| `--diagnose` | 导出诊断 zip（日志、配置、环境、最近错误；自动脱敏路径/用户名） |
 | `--status` | 查询是否已有实例在运行 |
 | `--version` / `--help` | 版本/帮助 |
 
@@ -123,7 +124,15 @@
 
 检查 KDE/Wayland/XWayland、sway/swaymsg、装饰 shim、虚拟键盘、Vulkan 设备、配置和日志目录。输出 `[ OK ]` / `[WARN]` / `[FAIL]`；有 `[FAIL]` 时返回 3。
 
-### 5.2 配置检查
+### 5.2 导出诊断包
+
+```bash
+./GemPrismUpscaler --diagnose
+```
+
+会在配置目录的 `diagnostics/` 下生成一个 zip，包含环境信息、脱敏配置、日志尾部、最近错误和嵌套状态。分享给支持人员前请先打开检查：日志里仍可能包含窗口标题。
+
+### 5.3 配置检查
 
 ```bash
 ./GemPrismUpscaler --config-check
@@ -131,7 +140,7 @@
 
 只加载配置并打印路径、schema、警告和错误，不启动会话。
 
-### 5.3 日志
+### 5.4 日志
 
 默认日志文件：
 

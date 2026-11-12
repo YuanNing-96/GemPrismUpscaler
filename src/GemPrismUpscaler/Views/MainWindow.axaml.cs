@@ -144,6 +144,20 @@ public partial class MainWindow : Window
             }, DispatcherPriority.Background);
         };
         LogTabOpenButton.Click += (_, _) => OpenLogDirectory();
+        ExportDiagnosticsButton.Click += (_, _) =>
+        {
+            try
+            {
+                string zip = DiagnosticsPackage.Create();
+                LogTabStatusText.Text = $"诊断包：{zip}";
+                AppendLog($"diagnostics package: {zip}");
+                OpenPath(Path.GetDirectoryName(zip) ?? AppPaths.ConfigDirectory);
+            }
+            catch (Exception ex)
+            {
+                ErrorBus.Functional("diagnostics", "导出诊断包失败", ex);
+            }
+        };
         LogTabClearButton.Click += (_, _) =>
         {
             LogText.Text = string.Empty;
@@ -819,7 +833,7 @@ public partial class MainWindow : Window
         WindowList.IsVisible = existing && !wayland;
         NestedPanel.IsVisible = nested;
         WaylandPanel.IsVisible = wayland;
-        StartButton.Content = wayland ? "选择 Wayland 窗口" : "开始超分";
+        StartButton.Content = wayland ? "选择 Wayland 全屏窗口" : "开始超分";
     }
 
     private void TogglePause()

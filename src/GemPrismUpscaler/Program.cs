@@ -56,6 +56,7 @@ sealed class Program
                                 args[0] == "--nested" || args[0] == "--nested-session" ||
                                 args[0] == "--nested-probe" ||
                                 args[0] == "--doctor" || args[0] == "--config-check" ||
+                                args[0] == "--diagnose" ||
                                 args[0] == "--help" || args[0] == "--version"))
         {
             Environment.Exit(RunConsole(args));
@@ -63,6 +64,7 @@ sealed class Program
         }
 
         EnsureConfiguration(args);
+        Log.WriteSessionHeader("gui", args, Config);
 
         // GUI launch. A second GUI instance must only report an error or, when
         // configured, ask the existing instance to come forward.
@@ -142,6 +144,15 @@ sealed class Program
                 return RunConfigCheck();
             if (args[0] == "--doctor")
                 return RunDoctor();
+            if (args[0] == "--diagnose")
+            {
+                EnsureConfiguration(args);
+                Log.WriteSessionHeader("diagnose", args, Config);
+                return RunDiagnose();
+            }
+
+            EnsureConfiguration(args);
+            Log.WriteSessionHeader(args[0], args, Config);
 
             if (args[0] == "--nested")
                 return RunNested(args);
@@ -654,6 +665,7 @@ sealed class Program
               GemPrismUpscaler --status                 query the running instance
               GemPrismUpscaler --doctor                 check the KDE/Wayland/nested runtime
               GemPrismUpscaler --config-check           load config and print warnings
+              GemPrismUpscaler --diagnose               export a diagnostics zip
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
 
@@ -804,6 +816,21 @@ sealed class Program
         catch
         {
             // notify-send is optional; the error window remains.
+        }
+    }
+
+    private static int RunDiagnose()
+    {
+        try
+        {
+            string zip = DiagnosticsPackage.Create();
+            Console.WriteLine(zip);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"diagnostics failed: {ex.GetType().Name}: {ex.Message}");
+            return 1;
         }
     }
 
