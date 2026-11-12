@@ -134,6 +134,14 @@ public sealed class NestedUpscaleSession : IDisposable
         Interlocked.Exchange(ref _toggleRequested, 1);
     }
 
+    public bool HasHostWindows
+    {
+        get
+        {
+            lock (_stateGate) return _states.Values.Any(s => s.Host is not null);
+        }
+    }
+
     public string OverlayDescription
     {
         get

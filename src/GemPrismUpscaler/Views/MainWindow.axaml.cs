@@ -660,6 +660,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (commandText.Contains("lutris", StringComparison.OrdinalIgnoreCase) && IsLutrisRunning())
+        {
+            const string message = "检测到 Lutris 正在运行。请先完全退出 Lutris（包括托盘图标），" +
+                                   "再启动嵌套会话；否则 Lutris 会把启动请求转给已有实例并直接退出。";
+            ErrorBus.Functional("nested", message);
+            StatusText.Text = "Lutris 仍在运行，嵌套未启动";
+            AppendLog("nested preflight: Lutris is still running; start refused");
+            return;
+        }
+
         string[] command;
         try
         {
@@ -836,6 +846,23 @@ public partial class MainWindow : Window
             PauseButton.Content = _portalSession.IsOverlayVisible ? "暂停超分" : "继续超分";
         else
             PauseButton.Content = "暂停超分";
+    }
+
+    private static bool IsLutrisRunning()
+    {
+        try
+        {
+            foreach (var process in Process.GetProcessesByName("lutris"))
+            {
+                process.Dispose();
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"nested preflight: Lutris process check failed: {ex.Message}");
+        }
+        return false;
     }
 
     private void OpenLogDirectory()
@@ -1084,6 +1111,16 @@ public partial class MainWindow : Window
                 return;
             }
             string? nestedReason = nested.ExitReason;
+            if (nestedReason is not null &&
+                nestedReason.Contains("command exited", StringComparison.Ordinal) &&
+                !nested.HasHostWindows)
+            {
+                const string message = "嵌套启动失败：命令已退出，但没有检测到游戏窗口。" +
+                                       "请确认 Lutris 已完全退出（包括托盘），或命令本身会保持运行。";
+                ErrorBus.Functional("nested", message);
+                StopSession(message);
+                return;
+            }
             StopSession(string.IsNullOrWhiteSpace(nestedReason) ? "嵌套会话已停止"
                 : $"已停止：{ChineseReason(nestedReason)}");
             return;
