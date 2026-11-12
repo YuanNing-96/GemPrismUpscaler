@@ -1116,10 +1116,17 @@ public partial class MainWindow : Window
                 nestedReason.Contains("command exited", StringComparison.Ordinal) &&
                 !nested.HasHostWindows)
             {
-                const string message = "嵌套启动失败：命令已退出，但没有检测到游戏窗口。" +
-                                       "请确认 Lutris 已完全退出（包括托盘），或命令本身会保持运行。";
-                ErrorBus.Functional("nested", message);
-                StopSession(message);
+                if (!nested.HasEverHadHostWindow)
+                {
+                    const string message = "嵌套启动失败：命令已退出，但没有检测到游戏窗口。" +
+                                           "请确认 Lutris 已完全退出（包括托盘），或命令本身会保持运行。";
+                    ErrorBus.Functional("nested", message);
+                    StopSession(message);
+                }
+                else
+                {
+                    StopSession("游戏已退出");
+                }
                 return;
             }
             StopSession(string.IsNullOrWhiteSpace(nestedReason) ? "嵌套会话已停止"

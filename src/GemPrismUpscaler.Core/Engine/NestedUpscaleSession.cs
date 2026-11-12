@@ -60,6 +60,7 @@ public sealed class NestedUpscaleSession : IDisposable
     private readonly Dictionary<string, (int Width, int Height)> _lastWindowedSizes = new();
 
     private volatile bool _stop;
+    private volatile bool _hasEverHadHostWindow;
     private bool _disposed;
     private string? _exitReason;
     private Exception? _initError;
@@ -154,6 +155,8 @@ public sealed class NestedUpscaleSession : IDisposable
         Interlocked.Exchange(ref _toggleRequestedId, id);
         Interlocked.Exchange(ref _toggleRequested, 1);
     }
+
+    public bool HasEverHadHostWindow => _hasEverHadHostWindow;
 
     public bool HasHostWindows
     {
@@ -799,6 +802,7 @@ public sealed class NestedUpscaleSession : IDisposable
             state.ParentId = parentState?.Id;
             state.Host = CreateHostWindow(title, state.SourceWidth, state.SourceHeight,
                 state.LastGameFullscreen, parentState, dialog);
+            _hasEverHadHostWindow = true;
             state.LastHostWidth = state.Host.Width;
             state.LastHostHeight = state.Host.Height;
             state.LastTitle = title;
@@ -1345,6 +1349,7 @@ public sealed class NestedUpscaleSession : IDisposable
 
             state.Host = CreateHostWindow(title, width, height, fullscreen: false, parent,
                 state.IsDialog);
+            _hasEverHadHostWindow = true;
             WireHost(state);
             state.Blitter = state.Host.CreateBlitter(state.Upscale ? _effect : OriginalEffect,
                 state.Capture?.SourceIsRgb ?? true);
