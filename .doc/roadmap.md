@@ -95,7 +95,10 @@ X11/XWayland 游戏窗口
 
 ## M2 · 平台扩展
 
-M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性能**。完整范围、决策、实现与验收见 [m2-plan.md](m2-plan.md)。
+M2 原拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性能**。**2026-11-13 决策**：
+M2c 仅剩的两项（嵌套 DMA-BUF 零拷贝、SDR 色彩准确性）不阻塞 v1.0，推迟到 v1.0 后作为可选
+优化；v1.0 由 M2b 主路径 + M3 打磨/分发组成。完整范围见 [m2-plan.md](m2-plan.md)，M2c 资料见
+[m2c-plan.md](m2c-plan.md)，v1.0 后项见 [post-v1.0.md](post-v1.0.md)。
 
 ### M2a · Wayland 平台核心（v0.4.0，核心 + portal + GlobalShortcuts 已实现；正式验收待补）
 
@@ -124,38 +127,48 @@ M2 拆成三段：**M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性�
 
 | 模块 | 内容 |
 |---|---|
-| 私有虚拟显示器 | sway headless 优先 / 隐藏嵌套窗口回退；输出 = 主窗口客户区尺寸（含 4:3） |
-| 捕获 | 主程序内 C# helper：`wlr-screencopy` / `wlr-export-dmabuf`；Unix socket/共享内存 |
-| 输入 | 原生 Wayland：`wlr-virtual-pointer` 绝对/相对；XWayland：nested XTest（raw 已验证）；虚拟键盘；指针锁定 |
+| 私有虚拟显示器 | sway headless 单输出 `HEADLESS-1`，按目标显示器物理分辨率/刷新率快照；宿主窗口跟随游戏 rect（含 4:3） |
+| 捕获 | 主程序内 C# helper：`ext-image-copy-capture` 按 toplevel 抓取；`wl_shm`（DMA-BUF 为 v1.0 后可选） |
+| 输入 | 原生 Wayland：`wlr-virtual-pointer` 绝对/相对；XWayland：`XWarpPointer` 绝对注入 + XTest 键鼠；虚拟键盘；**XWayland 指针锁/raw 推迟到 v1.0 后** |
 | 窗口识别 | Profile / token + PID/进程树 / sway IPC / transient+window type；歧义手动选择 |
 | 弹窗/启动器 | 嵌套内对话框浮动；启动器 → 游戏切换；`--nested` / `--nested-session` |
 | Lutris | per-game 环境变量/wrapper；Steam/Heroic 文档化 best-effort |
 
-**当前状态（2026-11-12）**：M2b 以“单输出 + 按 toplevel 抓取”路线完成，原 α/β1 拆分已被
-这条路线取代——α 的嵌套平台/2D 输入/动态分辨率、β1 的 patched sway/指针锁定/relative 都已并入
-并可用；多窗口改为“每窗口一个宿主、共享一个虚拟输出”，D1–D4 通过。验收分组结论：G1/G3/G4 通过；
-G2 X11 已修、Wayland 最小化归档；G5 通过（X11 跳转已验收；光标形状按“通过 + 已知问题”
-记录，图像光标列为 v1.0 后）；G6 记录为已知项。
-`dotnet build` 0 warning / 0 error，`dotnet test` 146/146。剩余已知问题（不阻塞 v1.0）：腐姬全屏、
-Wayland 自我最小化、图像光标、秽翼 Proton CSD、终末地启动器黑屏。详见
-`.agent/M2b-新路线-验收问题分组-20261111.md`。
+**当前状态（2026-11-13）**：M2b 以“单输出 + 按 toplevel 抓取”路线完成**主路径**，验收快照
+`v0.5.0`（此前 `v0.4.2` 为验收快照）。原 α/β1 拆分已被这条路线取代——α 的嵌套平台/2D 输入/
+动态分辨率、β1 的原生 Wayland relative 已并入；多窗口改为“每窗口一个宿主、共享一个虚拟输出”，
+D1–D4 通过。验收分组结论：G1/G3/G4 通过；G2 X11 已修、Wayland 最小化归档；G5 通过
+（X11 跳转已验收；光标形状按“通过 + 已知问题”记录，图像光标列为 v1.0 后）；G6 记录为已知项。
+`dotnet build` 0 warning / 0 error，`dotnet test` 146/146。
+
+**β2 未做、已推迟**：XWayland 指针锁/raw input、终末地 X11 镜头验收没有实现，v1.0 前不开发。
+git 里的 `97dbbf2 M2bβ2: minimize mirroring...` 是旧 β1 路线验收修复，不是计划里的 β2。详见
+[post-v1.0.md](post-v1.0.md) §1。
+
+剩余已知问题（不阻塞 v1.0）：腐姬全屏、Wayland 自我最小化、图像光标、秽翼 Proton CSD、
+终末地启动器黑屏、XWayland 指针锁/raw。详见 `.agent/M2b-新路线-验收问题分组-20261111.md`。
 
 **验收标准**：
 
 1. 1280×720（16:9）、1024×768（4:3）、1920×1080 在嵌套模式下捕获/超分/输入正确。
-2. 无光标跳变；指针/键盘/滚轮/拖拽/指针锁定正确。
+2. 无光标跳变；指针/键盘/滚轮/拖拽正确；原生 Wayland relative 可用。
 3. 启动器 → 游戏、对话框、关闭/退出正常；Lutris 实机通过。
 4. sway 缺失/helper 崩溃有明确错误与清理。
 
-### M2c · 色彩、性能与扩展（v0.6.0，计划）
+> XWayland 指针锁/raw 不在 M2b 验收范围，已推迟到 v1.0 后（[post-v1.0.md](post-v1.0.md)）。
+
+### M2c · 原色彩与性能收尾（v1.0 后可选，不阻塞 v1.0）
 
 | 模块 | 内容 |
 |---|---|
-| 色彩 | HDR/linear、tone map/直通；`wp_color_manager_v1` |
-| 零拷贝 | PipeWire/嵌套 DMA-BUF 导入 + 显式同步；失败回退 memfd/shm |
-| 混合管线 | GL+Vulkan 复核；无 GL 独占需求则明确 no-go |
-| 多屏拼接 | 跨屏连续拼接（如需） |
-| 输入/撕裂 | 非嵌套 X11 raw input；XWayland 撕裂最终方案（portal / DRI3+fence） |
+| 零拷贝 | 嵌套 toplevel DMA-BUF（GBM + `VK_EXT_external_memory_dma_buf`）；失败回退 shm |
+| 色彩 | SDR 正确性（8-bit BGRA + SRGB_NONLINEAR）；可选 10-bit 宿主输出实验 |
+| 状态 | **v1.0 前不做**；v1.0 后作为可选优化，不是 v1.0 门槛 |
+| 同时推迟 | 完整 HDR 游戏捕获；混合 GL+Vulkan；跨屏拼接；非嵌套 raw；portal/PipeWire 零拷贝；XWayland DRI3+fence 撕裂 |
+
+**范围决策（2026-11-13）**：v1.0 已能正常玩视觉小说，HDR 桌面下 SDR 也未观察到发灰；因此
+M2c 仅剩的两项（DMA-BUF 抓帧、SDR 色彩准确性）也列为已知问题，v1.0 前不做。实现与验收资料
+保留在 [m2c-plan.md](m2c-plan.md)，v1.0 后按需重启。
 
 ### M2 已知限制
 
@@ -164,10 +177,15 @@ Wayland 自我最小化、图像光标、秽翼 Proton CSD、终末地启动器�
 - 嵌套模式必须由 GemPrism/启动器把游戏启动到嵌套 session，不能接管已运行窗口。
 - KDE 优先；wlroots 真实桌面验收推后，可能不在 1.0 前完整验证。
 - 窗口化原生 Wayland 输入依赖 M2b 嵌套；M2a 只做全屏穿透。
+- XWayland 指针锁/raw input、终末地 X11 镜头、原 M2c 的嵌套 DMA-BUF 零拷贝、完整 HDR 游戏捕获、
+  混合 GL+Vulkan、跨屏拼接、portal 零拷贝、XWayland DRI3+fence 撕裂：v1.0 前不开发，见
+  [post-v1.0.md](post-v1.0.md)。
 
 ---
 
 ## M3 · 打磨与分发
+
+> v1.0 由 M2b 主路径 + 本阶段完成；原 M2c 两项不阻塞 v1.0，发布后作为可选优化。
 
 - Flatpak / AUR 打包
 - 崩溃恢复与诊断日志
@@ -180,10 +198,13 @@ Wayland 自我最小化、图像光标、秽翼 Proton CSD、终末地启动器�
 ## 里程碑依赖
 
 ```text
-M0 ──→ M1a ──→ M1b ──→ M1c ──→ M2a ──→ M2b ──→ M2c ──→ M3
+M0 ──→ M1a ──→ M1b ──→ M1c ──→ M2a ──→ M2b ──→ M3 ──→ v1.0
+                                      └─→ M2c（可选，v1.0 后）
 ```
 
-M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依赖 M1a 的实例与显示器模型；M2a 引入 Wayland 呈现/捕获核心；M2b 的嵌套合成器复用 M2a 的 overlay/呈现/输入框架；M2c 依赖 M2a/M2b 的帧路径。
+M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依赖 M1a 的实例与显示器模型；
+M2a 引入 Wayland 呈现/捕获核心；M2b 的嵌套合成器复用 M2a 的 overlay/呈现/输入框架；M3 完成
+打磨/分发后发布 v1.0；M2c 不再阻塞 v1.0，v1.0 后按需做嵌套零拷贝与色彩优化。
 
 未排期功能、设置界面需求和明确不做的项见 [backlog.md](backlog.md)；M2 详细计划见 [m2-plan.md](m2-plan.md)。
 
@@ -199,6 +220,7 @@ M1b 的脏矩形依赖 M1a 的多屏 overlay 抽象；M1c 的 Profile/设置依�
 | 0.2.1 | M1b（指标/S/M/L/脏矩形/上传优化/零拷贝 spike） |
 | 0.3.0 | M1c（设置/托盘/Profile/自定义 effect/VL/开发模式；动画留后续） |
 | 0.4.0 | M2a（Wayland layer-shell / XWayland 混合 / 多屏 / portal 捕获） |
-| 0.5.0 | M2b（嵌套合成器 / 窗口化原生输入 / Lutris） |
-| 0.6.0 | M2c（HDR/linear、零拷贝、混合管线、跨屏拼接） |
-| 1.0.0 | M3 完成，接口稳定 |
+| 0.4.1 / 0.4.2 | M2a 修复 / M2b 单输出主路径验收快照（不是 v0.5.0） |
+| 0.5.0 | M2b（嵌套合成器 / 窗口化输入 / Lutris；β2 指针锁/raw 推迟） |
+| 0.6.0 | 原 M2c；v1.0 后可选（嵌套 DMA-BUF 零拷贝、SDR 色彩收尾），不阻塞 v1.0 |
+| 1.0.0 | M2b 主路径 + M3 完成；M2c 作为后续可选优化 |

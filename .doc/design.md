@@ -1,6 +1,8 @@
 # 宝石棱镜 · GemPrismUpscaler 设计文档
 
-版本 0.4.0 · 对应 M2a（Wayland 平台核心，开发中）；M2b 嵌套合成器 / M2c 色彩性能见 [m2-plan.md](m2-plan.md)。M1c（设置 / 托盘 / Profile / 自定义 effect / VL）已交付。
+版本 0.5.0（M2b 单输出主路径）· 原 M2c（嵌套零拷贝 +
+SDR 色彩）不阻塞 v1.0，推迟为 v1.0 后可选优化（[m2c-plan.md](m2c-plan.md)）。v1.0 后项见
+[post-v1.0.md](post-v1.0.md)。M1c（设置 / 托盘 / Profile / 自定义 effect / VL）已交付。
 
 ---
 
@@ -84,7 +86,9 @@
 ├──────────────────────────────────────────────────────┤
 │  CaptureBackend            →  FrameSource             │
 │    x11:     XComposite + XDamage + XShm               │
-│    wayland: portal + PipeWire + DMA-BUF   (M2)        │
+│    wayland: portal + PipeWire (memfd; DMA-BUF 后置)    │
+│    nested:  ext-image-copy-capture + wl_shm           │
+│              (v1.0 后可选: GBM DMA-BUF → Vulkan)       │
 ├──────────────────────────────────────────────────────┤
 │  Layout 层                                            │
 │  源 rect + 屏幕 rect + 宽高比策略 → 每级 pass 的目标尺寸 │
@@ -227,7 +231,7 @@ CNN 类算法（Anime4K）是固定倍率模型，不能让它们直接输出任
 
 实测跨 API 交接开销约 0.13 ms/次（见第 7 节），性能不是障碍。但工程复杂度是真实成本。
 
-**M0 决策（2026-11-02）**：M0 不做混合管线，效果全部在 Vulkan 中执行（Anime4K S 5 pass + Lanczos-2）；保留 `EffectMode`/后续 backend 扩展点，M2 再评估 GL 路径。下面的策略作为 M2 的设计背景保留。
+**M0 决策（2026-11-02）**：M0 不做混合管线，效果全部在 Vulkan 中执行（Anime4K S 5 pass + Lanczos-2）；保留 `EffectMode`/后续 backend 扩展点。**2026-11-13 复核**：当前 effect 全是 SPIR-V compute，没有 GL 独占需求，倾向 no-go；v1.0 前不做，推迟到 v1.0 后（[post-v1.0.md](post-v1.0.md) §2）。下面的策略仅作为设计背景保留。
 
 **策略**：
 
@@ -256,10 +260,10 @@ M0 已决定不做混合路径，直接采用全 Vulkan；**M1 仍不做混合�
 | AOT | 先 self-contained 单文件；NativeAOT 后议 | M0a 未验证 Avalonia/Silk.NET 的 AOT |
 | UI | Avalonia 12.1.4 + Avalonia.Wayland | 原生 Wayland 后端；无 Wayland 时回退 X11 |
 | Vulkan | Silk.NET.Vulkan | 需要 external memory 与 drm modifier，高层封装会挡路 |
-| OpenGL | Silk.NET.OpenGL（M0b 混合实验） | 混合管线需要；用 headless EGL 在 NVIDIA |
+| OpenGL | Silk.NET.OpenGL（M0b 混合实验） | v1.0 不做混合管线；仅设计背景保留，若将来需要则 headless EGL |
 | X11 | 自写 P/Invoke（libX11/libXext/libXdamage） | Silk.NET.X11 覆盖不全；M0 不需要原生 C++ |
 | Wayland | `NWayland` 0.11.0 + `NWayland.Protocols.Wlr` 0.11.0 | 与 Avalonia.Wayland 12.1.4 的 NWayland 版本对齐；Wlr 包提供 layer-shell/screencopy/virtual pointer |
-| 屏幕共享 | xdg-desktop-portal ScreenCast v6 + PipeWire | 原生 Wayland 无通用窗口枚举/捕获；M2a 用 memfd，M2c 做 DMA-BUF |
+| 屏幕共享 | xdg-desktop-portal ScreenCast v6 + PipeWire | 原生 Wayland 无通用窗口枚举/捕获；M2a 用 memfd；portal DMA-BUF 与嵌套 toplevel DMA-BUF 均推迟到 v1.0 后 |
 | Shader | M0a 无 shader；M0b GLSL 离线编译为 SPIR-V | 运行时不依赖 glslang（用户自定义 shader 另议） |
 | 配置 | TOML | M1 接入；M0a 用 UI/CLI 参数 |
 | 原生辅助 | 无 | P/Invoke + Silk.NET 已够；去掉 CMake 依赖 |
@@ -456,7 +460,7 @@ DRI3 + DMA-BUF 的探针与结论见 [zero-copy-spike.md](zero-copy-spike.md)。
 
 ## 6.9 M2 平台扩展架构
 
-> M2 拆成 M2a（Wayland 平台核心）、M2b（嵌套合成器）、M2c（色彩/性能）。完整范围、决策与验收见 [m2-plan.md](m2-plan.md)。本节只记录架构。
+> M2 原拆成 M2a（Wayland 平台核心）、M2b（嵌套合成器）、M2c（色彩/性能）；原 M2c 推迟到 v1.0 后可选。完整范围、决策与验收见 [m2-plan.md](m2-plan.md)。本节只记录架构。
 
 ### 6.9.1 后端抽象与兼容策略
 
@@ -495,13 +499,15 @@ Engine / WaylandUpscaleSession
 - 呈现：Wayland layer-shell overlay + Vulkan Wayland WSI。
 - 输入：overlay 接收 `wl_pointer`；逻辑坐标按 scale 转物理，走现有 `CoordinateMapper` → 源窗口坐标 → `XSendEvent`；键盘不转发，`keyboard_interactivity=none` 保持游戏焦点。
 - 生命周期/弹窗/焦点：继续用 X11 `X11WindowProbe`/`X11WindowEnumerator`/`OverlayVisibility`；源窗口仍是 X11，判断逻辑不变。
-- 该路径解决 overlay 输入/焦点问题，但**不解决 XShm 捕获撕裂**；撕裂最终方案在 M2c。
+- 该路径解决 overlay 输入/焦点问题，但**不解决 XShm 捕获撕裂**。v1.0 主路径改用嵌套 +
+  toplevel 抓取，不走 XShm；旧 `--window` 的撕裂最终方案（portal 合成帧 / DRI3+fence）推迟到
+  v1.0 后（[post-v1.0.md](post-v1.0.md) §5）。
 
 ### 6.9.4 原生 Wayland 捕获
 
 - Portal `ScreenCast` v6：`CreateSession` → `SelectSources`（window/monitor、`cursor_mode=hidden`、`persist_mode=2`、`restore_token`）→ `Start` → `OpenPipeWireRemote`。
 - `restore_token` 单次使用：每次 Start 后保存新 token；失效重新弹系统选择器。
-- PipeWire：产品路径 P/Invoke `libpipewire-0.3`（`pw_thread_loop` + `pw_stream`）；优先 `SPA_DATA_MemFd`，DMA-BUF 留 M2c；支持格式/尺寸变化、`spa_meta_region` damage、流错误。
+- PipeWire：当前产品路径是 `gst-launch pipewiresrc` + CPU 帧管道；原生 `libpipewire` 客户端与 `SPA_DATA_Dmabuf` 零拷贝推迟到 v1.0 后；嵌套 toplevel DMA-BUF 同为可选。支持格式/尺寸变化、`spa_meta_region` damage、流错误。
 - 使用 `pipewire-serial` + `PW_KEY_TARGET_OBJECT` 定位流。
 - 源选择必须走 portal 系统选择器（Wayland 无通用窗口枚举）；`restore_token` 成功后尽量免打扰。
 - 输入：全屏源空 input region 穿透；窗口化原生源在 M2a 不做映射（M2b 嵌套解决）。
@@ -525,7 +531,8 @@ Engine / WaylandUpscaleSession
   （服务端装饰、分数缩放、`wp_pointer_warp_v1`）；`GEMPRISM_HOST_X11=1` 回退 X11/EWMH。
 - 呈现：Vulkan swapchain 直接建在宿主 `wl_surface` 上；缓冲像素 = 显示器物理像素，
   `wp_viewport` 映射回逻辑尺寸，因此超分画面在 1.5× 屏上仍是 1:1。
-- 输入：内部 XWayland 走 XTest；原生 Wayland 客户端走 `wlr-virtual-pointer` +
+- 输入：内部 XWayland 目前是 `XWarpPointer` 绝对定位 + XTest 键/鼠标按钮；**没有 X11 grab
+  检测、相对注入、raw**（v1.0 后 β2）。原生 Wayland 客户端走 `wlr-virtual-pointer` 绝对/相对 +
   `zwp_virtual_keyboard_manager_v1` helper（`tools/gemprism-vkeyboard`）。
 - 光标：游戏的 `zwp_locked_pointer_v1` 提示经 sway 补丁 → IPC → 应用 →
   `wp_pointer_warp_v1`，KWin 可见光标跟着跳；详见 [pointer-warp.md](pointer-warp.md)。
@@ -551,12 +558,28 @@ Engine / WaylandUpscaleSession
   KWin 顺序也一样），宿主会在点开后立刻弹回任务栏。Wayland 游戏（Wine 把窗口缩成 160×31）
   没有对应信号，同样不处理。
 
-### 6.9.7 M2c 色彩/性能（预览）
+### 6.9.7 原 M2c：嵌套零拷贝与色彩收尾（v1.0 后可选，不阻塞 v1.0）
 
-- HDR/linear：`wp_color_manager_v1` + 10-bit swapchain；tone map/直通。
-- DMA-BUF 零拷贝：PipeWire/嵌套抓帧导入 + `wp_linux_drm_syncobj`/Vulkan external semaphore；失败回退 memfd/shm。
-- 混合 GL+Vulkan 复核；无 GL 独占需求则明确 no-go。
-- 跨屏拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案。
+**决策（2026-11-13）**：v1.0 已能正常玩视觉小说，HDR 桌面下 SDR 也未观察到发灰；因此原 M2c
+仅剩的两项（嵌套 DMA-BUF 零拷贝、SDR 色彩准确性）也不在 v1.0 前做。完整 HDR、混合 GL+Vulkan、
+跨屏拼接、非嵌套 raw、portal 零拷贝、XWayland DRI3+fence 撕裂同样推迟。实现资料保留在
+[m2c-plan.md](m2c-plan.md)，v1.0 后项见 [post-v1.0.md](post-v1.0.md)。
+
+- **DMA-BUF 抓帧**：`ToplevelCapture` 从 `ext-image-copy-capture` 的 `dmabuf_device`/
+  `dmabuf_format` 协商格式；用 GBM 在 compositor 指定的 DRM 设备上分配 2–3 个 buffer，
+  通过 `zwp_linux_dmabuf_v1` 包成 `wl_buffer`，抓完 `ready` 后直接导入 Vulkan。
+- **Vulkan 导入**：`VK_EXT_external_memory_dma_buf` + `VK_EXT_image_drm_format_modifier`；
+  `VkImageDrmFormatModifierExplicitCreateInfoEXT` + `VkImportMemoryFdInfoKHR`；按
+  `(width,height,fourcc,modifier)` 缓存 image/view；跳过 CPU 读回/转换/整帧上传。
+- **回退**：无 dmabuf 格式、导入失败、跨 GPU、同步异常 → shm；`GEMPRISM_NESTED_DMABUF=0`
+  可强制关闭；日志记录原因。
+- **同步**：第一版按 `ready`（协议：“frame is copied, available for reading”）直接采样；
+  实测有撕裂再引入 `wp_linux_drm_syncobj`/fence + 双缓冲；不假设同步正确。
+- **色彩**：继续精确选 `B8G8R8A8Unorm` + `SRGB_NONLINEAR`，HDR 桌面下 SDR 不发灰；10-bit
+  宿主输出是可选实验，不作为 v1.0 门槛。嵌套内完整 HDR 不做（sway 未 advertise
+  `wp_color_manager_v1`）。
+- **脏矩形**：dmabuf 第一版全帧（没有 CPU 像素做 tile hash）；后续用 compositor damage/GPU
+  hash，不进 v1.0 门槛。
 
 ---
 
@@ -687,8 +710,8 @@ Engine / WaylandUpscaleSession
 | 分数缩放下的坐标换算 | 位置偏移 | XWayland 每屏物理矩形由 XRandR 提供；overlay 用单屏物理尺寸，输入 root 坐标减屏原点；已用 150% + 100% 混合布局实测 |
 | 鼠标转发对 raw input 无效 | FPS/鼠标视角游戏不工作 | M1 只支持视觉小说/2D；raw input 放后续阶段，需要虚拟输入设备/合成器方案 |
 | 轮询 `GetCursorPos`/DirectInput 的游戏看不到合成指针 | 悬停高亮可能仍不触发（点击/滚轮正常） | 合成事件只能更新 X/Wine 的消息队列，真实指针仍在 overlay 上；除非 warp 真实指针或引入虚拟输入设备/合成器方案（M2），M0 不承诺这类悬停 |
-| 色彩空间 | HDR 游戏可能发灰或偏亮 | M1a 为 SDR 直通；HDR 桌面下 SDR 内容用户实测正常；HDR/linear 留 M2 |
-| 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | 用 CPU 捕获 + NVIDIA Vulkan；混合管线用 headless EGL（同 GPU），已验证导出，M2 再评估 |
+| 色彩空间 | HDR 游戏可能发灰或偏亮 | v1.0 为 SDR 直通；HDR 桌面下 SDR 内容用户实测正常；完整 HDR 游戏捕获/10-bit 输出推迟到 v1.0 后 |
+| 多 GPU / 混合显卡 | 跨 GPU 拷贝；GL 在 AMD、Vulkan 在 NVIDIA | 用 CPU 捕获 + NVIDIA Vulkan；混合管线 v1.0 不做，headless EGL 方案推迟到 v1.0 后 |
 | XTest/EIS 授权 | 弹权限框、移动真实指针 | 不使用 XTest；用 XSendEvent 转发 |
 | 真实游戏验证 | 腐姬可能不到 60fps；秽翼静止时 1–2fps | 验收按“画面变化段 60fps、静止段不空转”执行；M1b 终末地 4K L 已测 59.5–60.7fps，M1a 老功能留 1.0 回归 |
 | 脏矩形边界/halo | 块缝、文字/1px 线断裂 | manifest radius + 2px 安全余量；one-shot、弹窗、resize 与整帧截图 `AE=0`；终末地 4K L 59.5–60.7fps |

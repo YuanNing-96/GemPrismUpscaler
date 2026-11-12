@@ -1,6 +1,6 @@
 # GemPrismUpscaler CLI 使用说明
 
-- 适用版本：`0.4.0`（M2a）；`--backend/--capture/--input/--portal-window` 已实现，具体以实际 `--help` 为准。
+- 适用版本：`0.5.0`（M2b 主路径）；`--backend/--capture/--input/--portal-window/--nested` 已实现，具体以实际 `--help` 为准。
 - 图形界面与 CLI 共用同一份配置：`~/.config/GemPrismUpscaler/config.toml`（`GEMPRISM_CONFIG` 可覆盖）。
 - 本文是发布文档；M2 计划见 [m2-plan.md](m2-plan.md)。
 
@@ -156,7 +156,7 @@ monitor = "auto"
 
 ---
 
-## 6. M2a 参数（0.4.0）
+## 6. M2a/M2b 参数（0.5.0）
 
 > 以下参数已实现；具体以 `--help` 为准。
 
@@ -200,22 +200,26 @@ GemPrismUpscaler --portal-window --monitor HDMI-A-1 --portal-reuse-token
 
 ---
 
-## 7. M2b 计划命令（0.5.0，计划）
+## 7. M2b 嵌套命令（已实现，单输出路线）
 
-> 以下为计划，不在 M2a 实现。
+> `--monitor` 必填；嵌套桌面按该显示器的物理分辨率/刷新率快照。`--nested-size` 已废弃，
+> 传入会被忽略。`GEMPRISM_TOPLEVEL_CAPTURE=1` 可显式启用按 toplevel 抓取（当前主路径）。
 
 ```bash
 # 启动一个游戏/启动器到私有嵌套合成器
-GemPrismUpscaler --nested -- <command...>
+GemPrismUpscaler --nested --monitor HDMI-A-1 -- <command...>
 
 # 只启动嵌套会话，写出 WAYLAND_DISPLAY/DISPLAY/token 供 Lutris/Steam 使用
-GemPrismUpscaler --nested-session --nested-size 1024x768
+GemPrismUpscaler --nested-session --monitor HDMI-A-1
+
+# 探针：只起嵌套会话并打印输出/窗口信息
+GemPrismUpscaler --nested-probe --monitor HDMI-A-1
 
 # wrapper：把最终游戏进程送进已有嵌套会话
 gemprism-nested-run -- <command...>
 ```
 
-Lutris 推荐用 per-game 环境变量/wrapper，把 `WAYLAND_DISPLAY`/`DISPLAY`/`GEMPRISM_NESTED_TOKEN` 传给最终游戏进程；Steam/Heroic 用启动选项 wrapper 做 best-effort。
+Lutris 推荐用 per-game 环境变量/wrapper，把 `WAYLAND_DISPLAY`/`DISPLAY`/`GEMPRISM_NESTED_TOKEN` 传给最终游戏进程；Steam/Heroic 用启动选项 wrapper 做 best-effort。`--sway <path>` 可覆盖内置 sway。
 
 ---
 

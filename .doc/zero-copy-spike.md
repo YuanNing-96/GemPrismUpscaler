@@ -1,5 +1,10 @@
 # 零拷贝可行性 spike（M1b）
 
+> **2026-11-13 范围更新**：原 M2c 的**嵌套 toplevel DMA-BUF 抓帧**（`ext-image-copy-capture`
+> + GBM + Vulkan external memory，见 [m2c-plan.md](m2c-plan.md)）也推迟到 v1.0 后作为可选优化。
+> 本文的 DRI3/portal 路径（非嵌套 `--window`、PipeWire）同样推迟，见
+> [post-v1.0.md](post-v1.0.md) §5/§7/§8；本文结论仍作为后续 spike 的基础。
+
 ## 1. 问题
 
 M1a/M1b 的捕获路径是：

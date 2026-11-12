@@ -1,12 +1,12 @@
 # GemPrismUpscaler · M2 阶段计划（M2a / M2b / M2c）
 
-- 更新时间：2026-11-08
-- 当前版本：`0.4.0`（M2a，核心 + portal + GlobalShortcuts 已实现；正式验收中）
-- M2 目标版本：M2a `0.4.0`、M2b `0.5.0`、M2c `0.6.0`
+- 更新时间：2026-11-13
+- 当前基线：`v0.5.0`（M2b 单输出主路径，2026-11-13 打 tag）；此前 `v0.4.2` 是验收快照；原 M2c `0.6.0` 不阻塞 v1.0
+- M2 目标版本：M2a `0.4.0`、M2b `0.5.0`；原 M2c `0.6.0` 为 v1.0 后可选
 - 目标环境：KDE Plasma 6.8.2 Wayland + XWayland；NVIDIA RTX 4060 Laptop；HDMI-A-1 3840×2160@144（HDR、150%）+ DP-1 1800×2880（100%）
 - 本文是 M2 的计划与交接文档。`roadmap.md` 是摘要，本文是详细范围/验收/实现决策；`design.md` 记录架构，`compatibility.md` 记录支持矩阵，`backlog.md` 记录未排期项。
 
-> M2a 只实现 Wayland 平台核心；M2b 的嵌套合成器在 M2b 阶段实施；M2c 的色彩/性能在 M2c 阶段实施。
+> M2a 只实现 Wayland 平台核心；M2b 的嵌套合成器在 M2b 阶段实施；原 M2c 的色彩/性能推迟到 v1.0 后作为可选优化。
 > 按用户约定：M2 不做旧功能完整回归，只保主要路径；完整回归留 v1.0 前统一做。
 
 ---
@@ -15,7 +15,7 @@
 
 | # | 决策 | 说明 |
 |---|---|---|
-| 1 | M2 拆成 M2a / M2b / M2c | M2a 平台核心 → M2b 嵌套合成器 → M2c 色彩/性能 |
+| 1 | M2 拆成 M2a / M2b / M2c | M2a 平台核心 → M2b 嵌套合成器 → 原 M2c 色彩/性能（现 v1.0 后可选） |
 | 2 | 不做 promote | 不允许为了输入映射把源窗口请求成全屏；源窗口状态保持不变 |
 | 3 | 窗口化原生 Wayland 输入用嵌套合成器 | 只有嵌套合成器能同时做到“窗口化 + 无光标跳变 + raw input” |
 | 4 | 嵌套实现：sway + helper | sway 作为私有虚拟显示器；helper 用 `wlr-screencopy` + `wlr-virtual-pointer` |
@@ -36,9 +36,10 @@
 
 - 原生 Wayland 窗口可捕获、超分、呈现；
 - Wayland 会话下输入不抢焦点、不产生光标跳变；
-- 窗口化原生 Wayland 游戏在嵌套合成器模式下输入 1:1、raw input 可用；
+- 窗口化原生 Wayland 游戏在嵌套合成器模式下输入 1:1；raw input 原为 M2 目标，现推迟到 v1.0 后；
 - 多显示器/热插拔/分数缩放/负坐标/不同宽高比可用；
-- HDR/色彩、零拷贝与性能在 M2c 收尾。
+- HDR/色彩、零拷贝与性能原计划在 M2c 收尾；**2026-11-13 决策：M2c 两项也不阻塞 v1.0，
+  推迟到 v1.0 后作为可选优化**。
 
 ### 2.2 非目标（M2 内不做）
 
@@ -53,7 +54,7 @@
 
 ## 3. 当前基线与已知限制（M1c / 0.3.0）
 
-- 构建：`dotnet build -c Release` 0 warning / 0 error；`dotnet test` 103/103。
+- 构建：`dotnet build -c Release` 0 warning / 0 error；`dotnet test` 146/146（M2b 主路径收尾时）。
 - 捕获：X11/XWayland 窗口，`XShmGetImage` + XDamage + 64px 脏矩形。
 - 呈现：X11 override-redirect overlay + Vulkan Xlib swapchain。
 - 输入：overlay 接收指针 + `XSendEvent` 转发；键盘不转发，焦点交还游戏。
@@ -72,16 +73,17 @@
 | 阶段 | 版本 | 主题 | 交付 | 不包含 |
 |---|---|---|---|---|
 | **M2a** | 0.4.0 | Wayland 平台核心 | 后端抽象；Wayland layer-shell overlay + Vulkan WSI；分数缩放；Wayland 输出枚举/热插拔；XWayland 混合（X11 捕获 + Wayland overlay + 转发）；原生全屏 portal/PipeWire 捕获 + 输入穿透；GlobalShortcuts 热键；CLI 文档 | 嵌套合成器、窗口化原生输入、原生焦点自动跟随、HDR、零拷贝、跨屏拼接 |
-| **M2b** | 0.5.0 | 嵌套合成器 | sway 私有虚拟显示器；`wlr-screencopy`/`wlr-export-dmabuf` 抓帧；`wlr-virtual-pointer`/虚拟键盘注入；任意分辨率/宽高比；弹窗/启动器/Lutris；窗口识别 | HDR、零拷贝优化 |
-| **M2c** | 0.6.0 | 色彩、性能与扩展 | HDR/linear；PipeWire/嵌套 DMA-BUF 零拷贝；混合 GL+Vulkan 复核；跨屏拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案 | — |
+| **M2b** | 0.5.0 | 嵌套合成器 | 单输出私有 sway；`ext-image-copy-capture` 按 toplevel 抓帧；`wlr-virtual-pointer`/虚拟键盘注入；任意分辨率/宽高比；弹窗/启动器/Lutris；窗口识别；原生 Wayland 宿主窗口 | HDR、零拷贝；β2 指针锁/raw 推迟到 v1.0 后 |
+| **M2c** | 0.6.0（不阻塞 v1.0） | 原色彩与性能收尾 | 嵌套 toplevel DMA-BUF 零拷贝（shm 回退）；HDR 桌面下 SDR 正确性；可选 10-bit 宿主输出实验。**2026-11-13：两项均推迟到 v1.0 后，可选** | 完整 HDR 游戏捕获；混合 GL+Vulkan；跨屏拼接；非嵌套 raw input；portal 零拷贝；XWayland DRI3+fence 撕裂 |
 
 依赖：
 
 ```text
 M1c (0.3.0)
   └─ M2a (0.4.0)  Wayland 呈现/捕获核心
-       ├─ M2b (0.5.0)  嵌套合成器（依赖 M2a 的 overlay/呈现/输入框架）
-       └─ M2c (0.6.0)  色彩/性能（依赖 M2a；部分依赖 M2b 的抓帧路径）
+       └─ M2b (0.5.0)  嵌套合成器（依赖 M2a 的 overlay/呈现/输入框架）
+            └─ M3 → v1.0
+                 └─ M2c（可选，v1.0 后；依赖 M2b 的抓帧路径）
 ```
 
 ---
@@ -158,7 +160,7 @@ Engine
   - 键盘不转发；`keyboard_interactivity=none` 保持游戏焦点。
   - 指针进入/离开内容矩形时补发 `EnterNotify/LeaveNotify`（复用现有 `X11Input` 逻辑）。
 - 生命周期/弹窗/焦点：继续用现有 X11 `X11WindowProbe` + `X11WindowEnumerator` + `OverlayVisibility`；overlay 是 Wayland surface，但源窗口仍是 X11，生命周期判断不变。
-- 这是 M2a 的默认 Wayland 会话路径；它解决 overlay 输入/焦点问题，但**不解决 XShm 捕获撕裂**（撕裂的最终方案在 M2c，见 §7.6）。
+- 这是 M2a 的默认 Wayland 会话路径；它解决 overlay 输入/焦点问题，但**不解决 XShm 捕获撕裂**（撕裂的最终方案推迟到 v1.0 后，见 [post-v1.0.md](post-v1.0.md) §5）。
 
 ### 5.5 原生 Wayland 捕获（portal + PipeWire）
 
@@ -168,7 +170,7 @@ Engine
   - 使用 `pipewire-serial` + `PW_KEY_TARGET_OBJECT` 定位流。
 - PipeWire：
   - 产品路径：P/Invoke `libpipewire-0.3`，`pw_thread_loop` + `pw_stream`。
-  - 优先 `SPA_DATA_MemFd`（CPU 映射，复用现有上传/effect 路径）；DMA-BUF 作为 fast path 留 M2c。
+  - 优先 `SPA_DATA_MemFd`（CPU 映射，复用现有上传/effect 路径）；DMA-BUF 作为 v1.0 后可选 fast path。
   - 支持格式/尺寸变化、`spa_meta_region` damage、流错误/关闭。
   - Spike/回退：可先用 GStreamer `pipewiresrc` 验证流格式，但产品路径不依赖 `gst-launch` 子进程。
 - 源选择：
@@ -252,7 +254,7 @@ mode = "auto"        # auto | passthrough | forward
   - 修复 layer-shell 从隐藏恢复时的崩溃和层级丢失：`attach(null)` 会让 KWin 发 `closed` 并把 layer 重置为 Bottom；改为不 unmap，隐藏时移到屏幕外，显示时重新锚定并声明 Overlay。XWayland 弹窗/焦点恢复、原生 portal 收起/显示均稳定且保持最上层。
   - 接入 portal GlobalShortcuts v2 + `org.freedesktop.host.portal.Registry`；自动写 user-local desktop entry；XDG trigger 使用 `ALT+SHIFT+A`。
   - 原生会话支持快捷键/托盘手动显示隐藏；原生焦点自动跟随仍不在 M2a。
-- 自动化：构建 0 warning / 0 error；测试 103/103。
+- 自动化：构建 0 warning / 0 error；测试 103/103（M2a 当时；M2b 收尾为 146/146）。
 
 未完成（M2a 剩余）：
 
@@ -279,7 +281,7 @@ mode = "auto"        # auto | passthrough | forward
 - portal `restore_token` 单次使用、窗口选择体验、流格式（memfd vs dmabuf）。
 - PipeWire P/Invoke/线程生命周期；GStreamer 回退不作为产品依赖。
 - 原生 Wayland 窗口化输入在 M2a 不解决（M2b 嵌套）。
-- XWayland 捕获撕裂仍在（M2c 最终方案）。
+- XWayland 捕获撕裂仍在（最终方案推迟到 v1.0 后）。
 
 ---
 
@@ -294,23 +296,35 @@ mode = "auto"        # auto | passthrough | forward
 
 ## 6. M2b · 嵌套合成器（M2b 阶段实施）
 
-### 6.0 实施状态（2026-11-08 18:54；2026-11-12 更新）
+### 6.0 实施状态（2026-11-08 18:54；2026-11-13 更新）
 
-- **2026-11-12**：M2b 已按“单输出 + toplevel 抓取”路线完成开发与主路径验收（`m2b-single-output`
-  分支，v0.5.0）；α/β1 的原拆分被这条路线取代，下文保留为历史计划。验收结论与剩余已知问题见
-  [roadmap.md](roadmap.md) 的 M2b 小节和 `.agent/M2b-新路线-验收问题分组-20261111.md`。
+- **2026-11-12**：M2b 已按“单输出 + toplevel 抓取”路线完成**主路径**开发与验收
+  （`m2b-single-output` 分支，验收快照 `v0.4.2`；正式里程碑仍为 `0.5.0`）。α/β1 的原拆分被这条
+  路线取代，下文保留为历史计划。验收结论与剩余已知问题见 [roadmap.md](roadmap.md) 的 M2b 小节和
+  `.agent/M2b-新路线-验收问题分组-20261111.md`。
+- **2026-11-13：β2 推迟到 v1.0 后**。计划里的 β2（XWayland 指针锁/raw + 终末地）没有实现、
+  没有验收；v1.0 前不开发，记录为已知问题，详见 [post-v1.0.md](post-v1.0.md) §1。git 里的
+  `97dbbf2 M2bβ2: minimize mirroring...` 是旧 β1 路线验收修复，不是本计划的 β2。
 - M2a 已完成并推送 `cd9d9b8`；M2bα 第一版功能已实现（历史记录）。
 - **B0 已通过**：headless sway 1.12、screencopy、virtual pointer、虚拟键盘、`swaymsg get_tree`。
-- **B0.5 已完成主要验证**：固定 sway 1.12 构建成功；虚拟指针无 XInput2 raw；nested XWayland XTest 能产生 raw；uinput/libinput 因 libseat 被 KDE 会话占用而不可直接用。
-- **最终架构**：所有新启动游戏默认进 nested sway；旧 M2a X11/portal 保留回退。M2b 拆为 **α（嵌套平台+2D+动态分辨率）/ β1（patched sway+指针锁定/relative）/ β2（raw+终末地）**。
+- **B0.5 已完成主要验证**：固定 sway 1.12 构建成功；虚拟指针无 XInput2 raw；nested XWayland XTest 能产生 raw（**仅 XI2 事件级探针，不是产品路径，也没有游戏验收**）；uinput/libinput 因 libseat 被 KDE 会话占用而不可直接用。
+- **最终架构**：所有新启动游戏默认进 nested sway；旧 M2a X11/portal 保留回退。M2b 拆为 **α（嵌套平台+2D+动态分辨率）/ β1（patched sway+指针锁定/relative）/ β2（raw+终末地）**；其中 α/β1 已并入单输出路线，β2 未实现，v1.0 后处理。
 - **分辨率策略**：nested 输出跟随游戏 `geometry`，不固定 1280×720；4:3/16:9/多分辨率动态 resize。
-- **raw 策略**：XWayland 用 nested XTest；原生 Wayland 用 virtual pointer relative；uinput 仅兜底；**禁止宿主 XTest**（会触发 KDE EIS 授权）。
+- **raw 策略（现状）**：XWayland 仍是 `XWarpPointer` 绝对注入；`XTestFakeRelativeMotionEvent` 未接产品路径；原生 Wayland 有 virtual pointer relative；**禁止宿主 XTest**（会触发 KDE EIS 授权）。raw/指针锁推迟到 v1.0 后，见 [post-v1.0.md](post-v1.0.md)。
 - 详细计划和证据见 `.agent/M2b-αβ-实施计划.md`、`.agent/M2b-开发记录.md`；原 B0/B1–B5 交接见 `.agent/M2b-开发交接.md`。
 - 用户约定：M2b 只做主路径，不创建 goal，用 plan/todo；不做 promote/改源窗口状态。
 
 ### 6.1 目标
 
 解决“窗口化原生 Wayland 游戏输入”：不改源窗口状态、不做 promote、不移动真实光标、raw input/指针锁定可用。做法是把游戏放进一个 **私有嵌套 Wayland 合成器**（sway），主程序抓它的输出并注入输入。
+
+> **2026-11-13 状态**：raw input/指针锁定**未实现**，只完成了主路径（2D/VN 输入、原生 Wayland
+> relative、弹窗/缩放/宿主）。XWayland 的指针锁/raw 推迟到 v1.0 后，见 [post-v1.0.md](post-v1.0.md) §1。
+
+> **历史计划说明（2026-11-13）**：§6.2–§6.6 是最初的“每游戏一个虚拟输出 + 整输出抓取”方案，
+> 保留作为设计背景。**当前实现以 §6.0 和 [roadmap.md](roadmap.md) 为准**：单 headless 输出、
+> `ext-image-copy-capture` 按 toplevel 抓取、每窗口一个原生 Wayland 宿主、XWayland 绝对注入。
+> 下文中的“输出 = 客户区尺寸”“抓整个嵌套输出”“screencopy”等描述已不是现状。
 
 ### 6.2 架构
 
@@ -364,11 +378,14 @@ GemPrismUpscaler（KDE 侧）
 ### 6.5 验收标准
 
 1. 1280×720（16:9）、1024×768（4:3）、1920×1080 三种源在嵌套模式下捕获/超分/输入正确。
-2. 无光标跳变；指针点击/滚轮/拖拽/键盘/指针锁定正确。
+2. 无光标跳变；指针点击/滚轮/拖拽/键盘正确；原生 Wayland relative 可用。
 3. 启动器 → 游戏切换、对话框显示/输入、关闭/退出正常。
 4. Lutris per-game env/wrapper 实机通过；Steam/Heroic 文档化。
 5. 静态画面不重复 present；性能/延迟记录（不做硬门槛）。
 6. sway 缺失/helper 崩溃有明确错误与清理。
+
+> **不在 M2b 验收范围**：XWayland 的指针锁/raw input、终末地 X11 镜头。它们原属 β2，
+> v1.0 前不开发，记录在 [post-v1.0.md](post-v1.0.md) §1。
 
 ### 6.6 风险
 
@@ -380,45 +397,58 @@ GemPrismUpscaler（KDE 侧）
 
 ---
 
-## 7. M2c · 色彩、性能与扩展（只写计划，M2a 不实现）
+## 7. 原 M2c · 色彩与性能收尾（v1.0 后可选，不阻塞 v1.0）
 
-### 7.1 HDR / linear 色彩
+> **2026-11-13 决策**：v1.0 已能正常玩视觉小说，HDR 桌面下 SDR 也未观察到发灰；因此 M2c 仅剩的
+> 两项（嵌套 DMA-BUF 零拷贝、SDR 色彩准确性）也列为已知问题，**v1.0 前不做**，v1.0 后作为
+> 可选优化。完整 HDR、混合 GL+Vulkan、跨屏拼接、非嵌套 raw、portal 零拷贝、XWayland
+> DRI3+fence 撕裂同样推迟。记录在 [post-v1.0.md](post-v1.0.md)，实现资料见
+> [m2c-plan.md](m2c-plan.md)。
 
-- 解析 PipeWire/嵌套帧的 10-bit/PQ/HLG/2020 格式。
-- SDR 源保持现状；HDR 源 tone map 到 SDR，或在 HDR 输出上直通。
-- 使用 `wp_color_manager_v1`（KWin 6.8 已确认 v3）+ `wp_color_representation_manager_v1`；Vulkan swapchain 选 10-bit 格式。
-- 验收：HDR 游戏不发灰/不偏色；SDR 内容不变；HDR 桌面下 overlay 正常。
+### 7.1 嵌套 toplevel DMA-BUF 零拷贝（v1.0 后可选）
 
-### 7.2 DMA-BUF 零拷贝
+- `ToplevelCapture` 接 `ext-image-copy-capture` 的 `dmabuf_device`/`dmabuf_format`；用 GBM 在
+  compositor 指定的 DRM 设备上分配 dmabuf，包成 `wl_buffer`，缓冲池 2–3 个。
+- Vulkan 通过 `VK_EXT_external_memory_dma_buf` + `VK_EXT_image_drm_format_modifier` 导入，
+  直接作为 effect 的 source；跳过 CPU 回读/格式转换/整帧上传。
+- 4K 源目标 ≥50fps，CPU capture <2ms/帧；720p/800p 视觉小说仍走原路径，不回归。
+- 回退：无 dmabuf 格式、导入失败、跨 GPU、同步异常时自动回 shm，并记录原因。
+- 脏矩形第一版不适用于 dmabuf（没有 CPU 像素）；先全帧，后续用 compositor damage 或 GPU hash。
 
-- PipeWire/嵌套抓帧的 DMA-BUF 导入 + `wp_linux_drm_syncobj`/Vulkan external semaphore 显式同步。
-- 处理多 plane/DCC；失败回退 memfd/shm；测量 CPU/延迟。
+### 7.2 色彩（v1.0 后可选回归）
 
-### 7.3 混合 GL+Vulkan
+- **现状**：继续精确选 `B8G8R8A8Unorm` + `SRGB_NONLINEAR`，HDR 桌面下 SDR 已实测正常；
+  colorspace 不精确时记录并回退，不静默用错。
+- **可选实验**：KWin 宿主提供 `wp_color_manager_v1` v3；若 Vulkan WSI 暴露 10-bit/HDR colorspace，
+  可加 10-bit swapchain + SDR→PQ tone map，不作为 v1.0 门槛。
+- **v1.0 后**：把“SDR 正确性”作为回归项，不新增功能。
+- **不做**：嵌套内完整 HDR 游戏捕获。嵌套 sway 不 advertise `wp_color_manager_v1`，`HEADLESS-1`
+  是 SDR、无 HDR metadata；给嵌套补 HDR 是独立项目。
 
-- 复核是否存在 GL 独占需求；当前自定义 effect 都是 SPIR-V compute，倾向 no-go。
-- 若需要：headless EGL + DMA-BUF 交接；否则更新 design/roadmap 的 F11。
+### 7.3 推迟到 v1.0 后（原 M2c 也不做）
 
-### 7.4 跨屏拼接（如需）
+- 混合 GL+Vulkan：当前 effect 全是 SPIR-V compute，倾向 no-go；无 GL 独占需求不投入。
+- 跨屏拼接：每屏独立 overlay 已够用；不做连续拼接。
+- 非嵌套 X11 raw input：与 β2 同源，uinput/libei 不适合 v1.0 默认路径。
+- XWayland 撕裂最终方案：v1.0 主路径是嵌套 + toplevel 抓取，不走 XShm；旧 `--window` 路径
+  继续记录为已知限制，DRI3+fence/portal 方案推迟。
+- portal/PipeWire 零拷贝：portal 继续 `gst-launch` CPU 路径，保证可用；原生 PipeWire + dmabuf
+  推迟。
 
-- 多输出 layer surface + 内容矩形切分 + 每屏 swapchain；否则不做。
+### 7.4 v1.0 后验收与顺序（当前不排期）
 
-### 7.5 非嵌套 X11 raw input
-
-- 纯 X11 会话的 uinput/libei 方案单独评估；不默认开启。
-
-### 7.6 XWayland 撕裂最终方案
-
-- 根据 M2a 的 portal/DRI3 spike 结果定默认路径；候选：
-  - portal 捕获 XWayland 窗口（合成帧，无半帧）；
-  - DRI3 + fence 零拷贝（`XCompositeNameWindowPixmap` + `DRI3BuffersFromPixmap` + Vulkan external memory/semaphore；仅 `nfd==1 && modifier==0`）。
-- 验收：真实游戏无旧帧回退/撕裂；不达标时明确记录，不静默宣称修复。
+1. 4K 源 dmabuf vs shm：帧率、CPU capture、GPU effect 分段对比；画面 `AE=0`；无撕裂。
+2. 回退路径：强制关闭 dmabuf 时 shm 正常；resize/格式变化不崩。
+3. SDR/HDR 桌面回归；720p/800p 视觉小说主路径不回归。
+4. 构建 0 warning / 0 error，测试通过。
+5. 顺序：先 spike 确认 wlroots 的 dmabuf 格式可导入 → 抓帧抽象/GBM 池 → Vulkan 导入 →
+   同步/性能 → 色彩保护 → 测试/文档。详见 [m2c-plan.md](m2c-plan.md)。
 
 ---
 
 ## 8. 分辨率与宽高比（M2a/M2b 共用）
 
-- 源尺寸不是固定 720p；支持 1280×720、1024×768、1920×1080、800×600、16:10/超宽/竖屏（超宽/4K 源性能在 M2c 评估）。
+- 源尺寸不是固定 720p；支持 1280×720、1024×768、1920×1080、800×600、16:10/超宽/竖屏（超宽/4K 源性能在 v1.0 后评估）。
 - 最终呈现复用 `LayoutCalculator`：
   - 1024×768 → 2× 2048×1536 → Lanczos 到 2880×2160（4K 16:9 下左右各 480px 黑边）。
   - 1280×720 → 2× 2560×1440 → 3840×2160。
@@ -435,7 +465,7 @@ GemPrismUpscaler（KDE 侧）
 自动化：
 
 - `dotnet build GemPrismUpscaler.slnx -c Release`：0 code warning / 0 error。
-- `dotnet test GemPrismUpscaler.slnx -c Release`：现有 103/103 + 新增测试。
+- `dotnet test GemPrismUpscaler.slnx -c Release`：现有 146/146 + 新增测试。
 - 新增测试建议：
   - Wayland 输出 scale/physical/logical 计算；
   - 4:3/16:9/竖屏内容矩形与输入映射；
@@ -465,7 +495,7 @@ GemPrismUpscaler（KDE 侧）
 - Wayland 运行库：`libwayland-client`、`libxkbcommon`（系统已有）。
 - 构建期：`/usr/share/dbus-1/interfaces/org.freedesktop.portal.{ScreenCast,Request,Session}.xml`（Tmds.DBus.Generator 生成代理；由 xdg-desktop-portal 包提供，后续可 vendor）。
 - Portal/PipeWire：`xdg-desktop-portal` 1.22.1、`xdg-desktop-portal-kde` 6.8.2、PipeWire 1.6.10（系统已有）。
-- Vulkan：`VK_KHR_wayland_surface`、`VK_KHR_surface`、`VK_KHR_swapchain`；DMA-BUF 扩展（M2c）。
+- Vulkan：`VK_KHR_wayland_surface`、`VK_KHR_surface`、`VK_KHR_swapchain`；DMA-BUF 扩展（v1.0 后可选）。
 - M2b：`sway`（用户手动安装）；`NWayland.Protocols.Wlr` 的 screencopy/virtual pointer；虚拟键盘绑定待定。
 
 ---
@@ -473,8 +503,11 @@ GemPrismUpscaler（KDE 侧）
 ## 11. 版本、提交与交接
 
 - M2a：`0.4.0`，提交信息前缀 `M2a:`；tag `v0.4.0` 由用户 push（agent 不 push）。
-- M2b：`0.5.0`，`M2b:`；tag `v0.5.0`。
-- M2c：`0.6.0`，`M2c:`；tag `v0.6.0`。
+- M2b：`0.5.0`，`M2b:`；正式 tag `v0.5.0` 已在 M2b 范围收口时打（单输出主路径）。此前的
+  验收快照 `v0.4.2` 不是正式里程碑。
+- M2c：原 `0.6.0`，**不阻塞 v1.0**；v1.0 前不打 tag，两项作为 v1.0 后可选优化，资料见 §7 与
+  [m2c-plan.md](m2c-plan.md)。
+- v1.0 后项：见 [post-v1.0.md](post-v1.0.md)。
 - 交接文件：
   - `.doc/m2-plan.md`（本文件）：范围/决策/验收。
   - `.doc/roadmap.md`：阶段摘要。
@@ -489,21 +522,24 @@ GemPrismUpscaler（KDE 侧）
 
 ## 12. 未决/待 spike
 
-- layer-shell 在 KWin 全屏游戏上的堆叠、input region、`keyboard_interactivity` 行为。
-- 150% 分数缩放下 layer-shell configure 是逻辑还是物理尺寸；viewporter/Vulkan WSI 对齐。
-- portal `restore_token` 在 KDE 的实际持久性/单次使用行为；窗口流格式（memfd/damabuf）。
-- PipeWire 客户端实现路径（P/Invoke vs GStreamer spike）；流尺寸/缩放。
-- M2b sway headless + NVIDIA 渲染器；隐藏嵌套窗口是否被 KWin 节流。
-- M2b 虚拟键盘绑定（NWayland.Protocols.Wlr 0.11 未包含）与键码/修饰键。
-- M2b 窗口识别字段（Wayland xdg-dialog/parent、X11 `window_type`/`transient_for`）在 sway IPC 中的实际暴露。
-- Lutris/Steam 环境变量是否被清洗；启动器转发；Steam overlay/反作弊。
-- XWayland 撕裂最终方案（portal vs DRI3+fence）。
+- **M2c 首要 spike（v1.0 后可选）**：本地 sway 1.12/wlroots 0.20 通过
+  `ext-image-copy-capture` 实际 advertise 的 `dmabuf_device`/`dmabuf_format` 是否包含 Vulkan
+  可导入的 32-bit 格式与 modifier；没有就必须回退 shm，零拷贝范围要重估。
+- v1.0 后（原 M2c）：GBM 分配给 dmabuf 的设备匹配（dev_t → render node）、跨 GPU 导入、`ready` 语义与
+  显式同步；4K 源的分段性能。
+- v1.0 后（原 M2c）：KWin `wp_color_manager_v1` v3 / Vulkan WSI 是否暴露 10-bit HDR colorspace（可选实验）。
+- **已归档/推迟**：β2 XWayland 指针锁/raw、终末地 X11、portal/PipeWire 零拷贝、混合管线、
+  跨屏拼接、非嵌套 raw、DRI3+fence 撕裂；见 [post-v1.0.md](post-v1.0.md)。
+- 历史项（已不阻塞）：layer-shell 在 KWin 的堆叠/input region、150% configure、portal token、
+  M2b 虚拟键盘/窗口识别字段、Lutris/Steam 环境变量/反作弊。
 
 ---
 
 ## 13. 参考
 
 - `.doc/roadmap.md`：里程碑摘要。
+- `.doc/m2c-plan.md`：M2c 收敛范围、零拷贝实现与验收。
+- `.doc/post-v1.0.md`：v1.0 前不做的功能与已知问题。
 - `.doc/design.md`：架构与实现细节。
 - `.doc/compatibility.md`：支持矩阵/已知限制。
 - `.doc/effects.md`：自定义 effect ABI。

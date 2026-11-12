@@ -4,18 +4,20 @@
 
 宝石棱镜把低分辨率的游戏窗口实时超分到全屏显示。它支持任意分辨率与任意宽高比的组合，目标是通过可配置的 effect 管线组合 Anime4K、FSR 等算法。它不修改游戏、不注入 DLL、不依赖 gamescope，因此对 32/64 位、D3D9/11/12/OpenGL/Vulkan 游戏一视同仁。
 
-当前版本是 **v0.3.0（M1c）**：在 M1b 的 Anime4K S/M/L、脏矩形和指标之上，加入 **设置/配置持久化**、**托盘**、**Profile 自动匹配**、**自定义 effect（TOML + 预编译 SPIR-V）**、**Anime4K VL** 和**开发模式诊断**。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。M1c 不做动画、不做完整回归（留到 v1.0 统一验收）。
+当前版本是 **v0.5.0（M2b 主路径）**：私有嵌套 sway + `ext-image-copy-capture` 按 toplevel 抓帧 + 原生 Wayland 宿主窗口；视觉小说/2D 窗口化游戏可捕获、超分、还原、输入、弹窗和退出。默认仍是 Anime4K S + Lanczos-2，双线性回退保留。
+
+M2bβ2（XWayland 指针锁/raw）和原 M2c（嵌套 DMA-BUF 零拷贝、SDR 色彩准确性）不阻塞 v1.0，推迟为 v1.0 后可选优化；v1.0 = M2b 主路径 + M3 打磨/分发。M1c 的动画仍不做，留到 v1.0 前评估。
 
 ## 支持范围
 
 | 维度 | 状态 |
 |---|---|
-| 操作系统 | **Linux：部分支持**（X11/XWayland + M2a 原生 Wayland portal）；**Windows：暂不支持**；**macOS：暂不支持** |
-| 桌面/会话 | **KDE Plasma 6 Wayland + XWayland：已验证**；原生 Wayland：M2a 已实现（portal + layer-shell）；KDE X11：理论可用、未验证；GNOME / wlroots：未验证（M2 只做协议级） |
-| 窗口类型 | X11 / XWayland 顶层窗口：支持；原生 Wayland 窗口：M2a 通过 portal 窗口/显示器捕获（窗口化含标题栏/阴影，全屏/无边框推荐） |
-| 显示器 | 单显示器：支持；多显示器：M1a 基础 + M2a Wayland 输出枚举/分数缩放/基础热插拔 |
-| HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；HDR 色彩管理：M2c |
-| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入/自动跟随焦点：M2b 嵌套合成器 |
+| 操作系统 | **Linux：部分支持**（X11/XWayland + M2a 原生 Wayland portal + M2b 嵌套）；**Windows：暂不支持**；**macOS：暂不支持** |
+| 桌面/会话 | **KDE Plasma 6 Wayland + XWayland：已验证**；M2b 私有嵌套 sway（headless 单输出）；原生 Wayland：M2a portal + layer-shell；KDE X11：理论可用、未验证；GNOME / wlroots：未验证（M2 只做协议级） |
+| 窗口类型 | X11 / XWayland 顶层窗口：支持（嵌套走按 toplevel 抓取）；原生 Wayland 窗口：M2a portal 捕获 / M2b 嵌套；窗口化原生捕获含标题栏/阴影 |
+| 显示器 | 单显示器：支持；多显示器：M1a 基础 + M2a Wayland 输出枚举/分数缩放/基础热插拔；嵌套会话按所选显示器物理分辨率固定单输出 |
+| HDR | SDR 直通：支持（HDR 桌面下可正常显示 SDR 内容）；完整 HDR 游戏捕获/10-bit 输出：v1.0 后 |
+| 输入 | 视觉小说/2D：X11/XWayland 支持；原生 Wayland 全屏：输入穿透；窗口化原生输入/自动跟随焦点：M2b 嵌套合成器；**XWayland 指针锁/raw：v1.0 不支持，v1.0 后评估** |
 | 原生 Wayland 热键 | **支持（KDE）**：portal GlobalShortcuts；首次授权，若 KDE 存成 `none` 需系统设置手动分配 |
 | GPU | NVIDIA 专有驱动：已验证；AMD/Intel Vulkan：理论可用、未验证；多 GPU/混合显卡：未验证 |
 | 算法 | **Anime4K S/M/L/VL 2× + Lanczos-2：支持**（默认 S；VL 为实验最高画质档）；双线性回退：支持；FSR1、NIS、Lanczos-3、Bicubic：未排期 |
@@ -184,17 +186,22 @@ done
 - 脏矩形哈希在 720p 约 1 ms/帧；4K 源约 4 倍，M1b 只承诺常见 VN 分辨率。
 - 软件 testpattern 的 4K capture 约 23 ms，4K 下只有 37–38 fps；真实游戏（Vulkan、同屏）capture 3.3–4.6 ms，4K L 59.5–60.7 fps。测试图案的 fps 不代表真实游戏上限。
 - 4K 源（2× → 8K）未测；swapchain 显示模式 recreation 仍不完整。
-- 零拷贝只完成“导出 + Vulkan 导入”可行性，未做 fence 同步和真实游戏端到端验证，**不进入默认链路**。详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
-- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay + GlobalShortcuts；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；**切到其他程序不会自动收起**（M2a 用热键/托盘，M2b 解决）；HDR/linear 在 M2c。
+- 零拷贝：v1.0 默认走 shm；嵌套 toplevel 的 DMA-BUF、portal/PipeWire 零拷贝、非嵌套 DRI3+fence 均推迟到 v1.0 后作为可选优化。旧的“导出 + Vulkan 导入”spike 详见 [.doc/zero-copy-spike.md](.doc/zero-copy-spike.md)。
+- 原生 Wayland：M2a 已实现 portal 捕获 + layer-shell overlay + GlobalShortcuts；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（低分辨率原生源需 M2b 嵌套或 XWayland 捕获）；窗口化原生捕获含标题栏/阴影；**切到其他程序不会自动收起**（M2a 用热键/托盘，M2b 解决）；完整 HDR 留到 v1.0 后。
+- **v1.0 范围**：M2b 主路径 + M3 打磨/分发；原 M2c 的嵌套 DMA-BUF 零拷贝、SDR 色彩准确性不阻塞 v1.0，作为 v1.0 后可选优化。
+- **M2bβ2 未做**：XWayland 的指针锁/raw input 没有实现，FPS/3D 鼠标视角在嵌套模式下不承诺；终末地 X11 镜头未验收。详见 [.doc/post-v1.0.md](.doc/post-v1.0.md)。
+- 混合 GL+Vulkan、跨屏连续拼接、非嵌套 X11 raw、XWayland DRI3+fence 撕裂均推迟到 v1.0 后（[.doc/post-v1.0.md](.doc/post-v1.0.md)）。
 - **M1c 不做动画**（留到 v1.0 前评估）；VL 是实验最高画质档，帧率不作为验收门槛。
 - **KDE Wayland + 4K/150% 下 ComboBox 下拉列表不跟随窗口移动**（DP 100% 正常）。这是 Avalonia/Wayland popup 的定位限制，M1 不处理，已记录在 [.doc/backlog.md](.doc/backlog.md) §7。
 - 自定义 effect 只支持 compute pass + 内置 Lanczos-2 收尾，不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 上限 256 B（设备可能更低）。
-- M2a 按约定只做主要路径冒烟；完整回归/边界兼容性留到 v1.0 统一进行。
+- M2b 按约定只做主要路径验收；完整回归/边界兼容性留到 M3/v1.0 统一进行。
 
 ## 文档
 
 - [设计文档](.doc/design.md) —— 需求、架构、技术选型、实现细节
 - [M2 计划](.doc/m2-plan.md) —— M2a/M2b/M2c 范围、实现、验收与交接
+- [M2c 资料](.doc/m2c-plan.md) —— 嵌套 DMA-BUF 零拷贝与色彩收尾（v1.0 后可选）
+- [v1.0 后功能](.doc/post-v1.0.md) —— 推迟项、已知问题与重启条件
 - [CLI 使用](.doc/cli.md) —— 命令、参数、退出码与示例
 - [路线图](.doc/roadmap.md) —— M0/M1/M2 阶段划分与验收标准
 - [兼容性](.doc/compatibility.md) —— 支持矩阵、已测试环境、已知限制

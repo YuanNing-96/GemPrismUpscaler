@@ -2,7 +2,12 @@
 
 本文记录 GemPrismUpscaler 的支持范围、已测试环境和已知限制。里程碑进度见 [roadmap.md](roadmap.md)，M2 详细计划见 [m2-plan.md](m2-plan.md)，未排期功能见 [backlog.md](backlog.md)。
 
-> **M2 状态**：M2a（Wayland 平台核心 + portal 捕获 + portal GlobalShortcuts）已实现并冒烟；原生焦点自动跟随、窗口化原生装饰裁剪、正式手测待补。M2b（嵌套合成器）与 M2c（HDR/零拷贝/混合管线）为计划。
+> **M2 状态（2026-11-13）**：M2a（Wayland 平台核心 + portal 捕获 + GlobalShortcuts）已实现并冒烟。
+> M2b 以“单输出 + 按 toplevel 抓取”路线完成主路径，`v0.5.0` 已打 tag（此前 `v0.4.2` 为验收快照）；
+> β2 的 XWayland 指针锁/raw input 推迟到 v1.0 后。原 M2c 仅剩的两项（嵌套 toplevel DMA-BUF
+> 零拷贝、SDR 色彩准确性）也列为已知问题，**v1.0 前不做，不阻塞 v1.0**；完整 HDR/混合管线/
+> 跨屏拼接/portal 零拷贝/非嵌套撕裂同样推迟。详见 [m2c-plan.md](m2c-plan.md)、
+> [post-v1.0.md](post-v1.0.md)。
 
 ## 1. 支持矩阵
 
@@ -17,14 +22,16 @@
 | wlroots（sway/Hyprland/niri 等）+ XWayland | 未验证 | M2 只做协议级验证；真实桌面验收推后 |
 | 原生 Wayland 窗口 | M2a 已实现（窗口化输入/焦点跟随 M2b） | portal ScreenCast + PipeWire；全屏输入穿透；捕获含标题栏/阴影，正式验收以全屏/无边框为准；切到其他程序不会自动收起（M2a 用热键/托盘） |
 | X11 顶层窗口 | 支持 | XShm + XDamage |
-| XWayland 顶层窗口 | 支持 | 与 X11 同一捕获路径；窗口坐标为物理像素；M2a 可走 Wayland overlay |
+| XWayland 顶层窗口 | 支持 | 非嵌套走 XShm/XDamage；嵌套走 `ext-image-copy-capture` 按 toplevel 抓取；窗口坐标为物理像素 |
 | 单显示器 | 支持 | |
-| 多显示器 | M1a 基础 + M2a | M2a：Wayland 输出枚举、基础热插拔、每屏缩放；overlay 只覆盖选中屏；portal 源与 overlay 建议选同一块屏 |
+| 多显示器 | M1a 基础 + M2a | M2a：Wayland 输出枚举、基础热插拔、每屏缩放；overlay 只覆盖选中屏；portal 源与 overlay 建议选同一块屏；**跨屏连续拼接不做（v1.0 后）** |
 | 多显示器热插拔 | M2a 已实现（基础） | M1a 会重新枚举并在选屏失效时回退；M2a 监听 Wayland global_remove 并回退到另一块屏 |
-| HDR 桌面 | SDR 直通 | HDR 开启时可正常显示 SDR 内容；HDR/linear 色彩在 M2c |
+| HDR 桌面 | SDR 直通（v1.0） | HDR 开启时可正常显示 SDR 内容，不发灰；完整 HDR 游戏捕获/10-bit 输出推迟到 v1.0 后 |
 | 视觉小说/2D 输入 | 支持 | X11/XWayland：`XSendEvent`；M2a 全屏原生：输入穿透；窗口化原生/自动跟随焦点：M2b |
 | 原生 Wayland 热键 | 支持（KDE） | portal GlobalShortcuts；首次授权，KDE 若存成 `none` 需在系统设置手动分配 |
-| FPS/鼠标视角/raw input | M2b/M2c 计划 | 全屏/嵌套模式可输入穿透；窗口化原生用嵌套合成器；纯 X11 方案 M2c |
+| FPS/鼠标视角/raw input | v1.0 不支持 | 嵌套原生 Wayland 有 relative；XWayland 仍是绝对注入，没有 grab 检测/相对/raw；β2 推迟到 v1.0 后 |
+| 混合 GL+Vulkan 管线 | v1.0 不做 | 当前 effect 全是 SPIR-V compute，无 GL 独占需求；复核倾向 no-go |
+| 跨屏连续拼接 | v1.0 不做 | 每屏独立 overlay 已够用；不做跨屏连续画面 |
 | NVIDIA 专有驱动 | 已验证 | RTX 4060 Laptop，Vulkan 1.4 |
 | AMD/Intel Vulkan | 未验证 | 代码按标准 Vulkan 编写，未实机测试 |
 | 混合显卡 | 部分支持 | 捕获走 CPU；effect 选择 DiscreteGpu/NVIDIA；跨 GPU 未验证 |
@@ -36,7 +43,7 @@
 | 托盘 | 可选 | KDE/XFCE/Cinnamon/MATE/Ubuntu GNOME（AppIndicator）等；GNOME 无扩展时不创建，应用仍正常 |
 | 分块脏矩形 | 支持 | 64px 哈希 + CNN halo + 持久合成图；`--no-dirty-rect` 可关闭；自定义 effect 可 `requires_full_frame` |
 | 分段指标 / CSV | 支持 | capture/diff/upload/effect/present、GPU timestamp、NVML、CPU、p95 |
-| 零拷贝（DRI3/DMA-BUF） | spike 完成 | 线性 1-fd GPU 窗口可导入；2-fd/DCC 需回退；未进默认链路 |
+| 零拷贝 | v1.0 后可选 | 嵌套 toplevel DMA-BUF（GBM + Vulkan external memory）为 v1.0 后可选优化；v1.0 默认走 shm；portal/PipeWire 零拷贝和非嵌套 DRI3+fence 同样推迟 |
 | FSR1 / NIS / Lanczos-3 / Bicubic | 未排期 | 有需求再评估 |
 
 ## 2. 当前验证环境
@@ -67,9 +74,9 @@
 ## 4. 已知限制
 
 1. **原生 Wayland**：M2a 已实现 portal/PipeWire + layer-shell overlay；窗口化原生输入映射与**焦点自动跟随**由 M2b 嵌套合成器解决；M2a 只做全屏输入穿透；窗口捕获含标题栏/阴影；KDE 窗口流按输出 scale 合成，720p 全屏在 4K 输出上会得到 4K 流，M2a 会自动禁用 2×（无真实超分收益），低分辨率原生源需 M2b 嵌套或 XWayland 捕获。
-2. **多显示器**：M1a 有基础版；M2a 增加 Wayland 输出枚举/热插拔/每屏缩放；跨屏连续拼接在 M2c（如需）。
-3. **FPS/raw input**：M2a 全屏源可输入穿透；窗口化原生 Wayland 由 M2b 嵌套合成器解决；纯 X11 会话的 raw input 在 M2c 评估。
-4. **HDR**：SDR 直通；HDR/linear 色彩在 M2c。
+2. **多显示器**：M1a 有基础版；M2a 增加 Wayland 输出枚举/热插拔/每屏缩放；跨屏连续拼接 v1.0 前不做，推迟到 v1.0 后。
+3. **FPS/raw input**：M2a 全屏源可输入穿透；嵌套原生 Wayland 有 relative；**XWayland 的指针锁/raw 没有实现**，v1.0 不支持，β2 推迟到 v1.0 后（[post-v1.0.md](post-v1.0.md) §1）。
+4. **HDR**：v1.0 只保证 HDR 桌面下 SDR 正确（SDR 直通，不发灰）；完整 HDR 游戏捕获/10-bit 输出推迟到 v1.0 后。
 5. **4K 源**：2× 后是 8K，显存/带宽显著上升；M1b 仍只承诺常见 VN 分辨率（720p/1024×768/1080p）。脏矩形哈希 720p 约 1ms/帧，4K 源约 4 倍。
 6. **黑边输入**：非 stretch（fit）时左右/上下黑边不转发鼠标点击和滚轮，这是预期行为，因为黑边不是源窗口像素；stretch 后原黑边区域被画面覆盖，会正常转发。
 7. **swapchain resize**：M1a 在显示器变化时重建 overlay/blitter；源窗口 resize 会重建 capture，但显示模式本身的 swapchain recreation 仍不完整。
@@ -77,18 +84,18 @@
 9. **设置界面**：M1c 已实现；设置持久化在 `~/.config/GemPrismUpscaler/config.toml`，`GEMPRISM_CONFIG` 可覆盖。
 10. **自定义 shader**：M1c 支持 TOML + 预编译 SPIR-V 的 compute pass 链；不支持自定义 graphics 最终 pass；纹理上限 19、单 pass 输入 16、push constant 256B（设备可能更低）。
 11. **VL**：实验最高画质档，18 pass/19 纹理；720p 源/4K 输出下首帧 effect CPU 约 466ms（含 pipeline 创建），VRAM 约 880MiB（整卡）；帧率不作为验收门槛。
-12. **GPU 窗口捕获撕裂**：X11/XWayland 下 `XShmGetImage`/`XGetImage`/XComposite 读取 GPU 更新的窗口时可能拿到半帧，overlay 会旧帧回退/撕裂；源窗口本身可能正常。M1c 未解决；M2a 的 XWayland 混合仍用 XShm，撕裂最终方案在 M2c（portal 合成帧 / DRI3+fence）。临时规避：源程序开 VSync。
+12. **GPU 窗口捕获撕裂**：X11/XWayland 下 `XShmGetImage`/`XGetImage`/XComposite 读取 GPU 更新的窗口时可能拿到半帧，overlay 会旧帧回退/撕裂；源窗口本身可能正常。v1.0 主路径是嵌套 + toplevel 抓取，不走 XShm，因此不是 v1.0 门槛；旧 `--window` 路径的 portal/DRI3+fence 最终方案推迟到 v1.0 后（[post-v1.0.md](post-v1.0.md) §5）。临时规避：源程序开 VSync，或改用嵌套模式。
 13. **ComboBox 拖动问题**：KDE Wayland + 4K/150% 下，打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 正常。Avalonia/Wayland popup 限制，M1 不处理，记录在 backlog §7。
-11. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
-12. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
-13. **零拷贝**：只在 vkcube 线性 1-fd 上验证导入；软件窗口 2-fd/DCC 回退 XShm；未做 fence 同步/真实游戏/跨 GPU，未进默认链路。
-14. **present 计时**：包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；软件 testpattern 4K 约 37–38fps，真实游戏 4K L 59.5–60.7fps。
-15. **4K 外接屏**：已在 HDMI-A-1 3840×2160@144 + 终末地 1280×720@60 + Anime4K L 上实测 59.5–60.7fps；4K 源（2×→8K）仍未测。
+14. **多屏焦点**：当前“跟随焦点”在操作另一块屏上的程序时会收起 overlay；这是 M1a 的预期行为，更多策略见 backlog。
+15. **`.agent` 不入库**：交接、截图、探针只在本机；`.doc`/README 是发布文档。
+16. **零拷贝**：v1.0 不做；嵌套 toplevel DMA-BUF 作为 v1.0 后可选优化，portal/PipeWire 零拷贝、非嵌套 DRI3+fence 同样推迟。旧 spike 的线性 1-fd 导入/2-fd/DCC 回退结论仍有效。
+17. **present 计时**：包含 `QueuePresent` 的 vblank/队列等待，不是纯 CPU 工作；软件 testpattern 4K 约 37–38fps，真实游戏 4K L 59.5–60.7fps。
+18. **4K 外接屏**：已在 HDMI-A-1 3840×2160@144 + 终末地 1280×720@60 + Anime4K L 上实测 59.5–60.7fps；4K 源（2×→8K）仍未测。
 
 ## 5. 平台差异
 
 - **XWayland 是 1:1 物理像素**：150% 缩放下 root 仍是 3840×2160；overlay 必须用物理矩形，不能按逻辑 2560×1440。
 - **XRandR monitor 矩形**已经包含每块屏的缩放和旋转；多屏布局用 `XRRGetMonitors` 读取，不用窗口管理器逻辑坐标。
 - **输入焦点**：KWin 下只调 `XSetInputFocus` 可能被焦点窃取防护忽略；必须配合 EWMH `_NET_ACTIVE_WINDOW`。
-- **XTest 不可用**：KWin EIS 授权门控且会移动真实指针；当前用 `XSendEvent`。
+- **宿主 XTest 不可用**：KWin EIS 授权门控且会移动真实指针；非嵌套路径用 `XSendEvent`。嵌套私有 XWayland 内的 XTest 不受此限制（不触发 KDE 授权、不动真实光标）。
 - **快捷键冲突**：第二个实例不能再抢 `Alt+Shift+A`，所以单实例是硬约束。

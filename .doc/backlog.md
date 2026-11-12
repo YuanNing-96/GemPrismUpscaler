@@ -51,15 +51,37 @@ M1c 已实现完整的设置/配置界面；下表保留为需求对照。
 
 M2 已拆成 M2a / M2b / M2c，详细计划见 [m2-plan.md](m2-plan.md)。
 
-- **M2a（0.4.0，开发中）**：Wayland layer-shell 呈现、XWayland 混合、原生 Wayland portal/PipeWire 捕获（全屏输入穿透）、多屏/分数缩放/热插拔、GlobalShortcuts、CLI 文档。
-- **M2b（0.5.0，计划）**：嵌套合成器（sway + helper）解决窗口化原生 Wayland 输入；任意分辨率/4:3；弹窗/启动器/Lutris；无光标跳变；raw input/指针锁定。
-- **M2c（0.6.0，计划）**：HDR/linear 色彩；PipeWire/嵌套 DMA-BUF 零拷贝；混合 GL+Vulkan 复核；跨屏连续拼接（如需）；非嵌套 X11 raw input；XWayland 撕裂最终方案。
+- **M2a（0.4.0，已完成）**：Wayland layer-shell 呈现、XWayland 混合、原生 Wayland portal/PipeWire
+  捕获（全屏输入穿透）、多屏/分数缩放/热插拔、GlobalShortcuts、CLI 文档。
+- **M2b（0.5.0，主路径完成，已打 tag；此前 v0.4.2 为验收快照）**：单输出嵌套合成器 + 按 toplevel 抓取；任意
+  分辨率/4:3；弹窗/启动器/Lutris；无光标跳变；原生 Wayland relative。**β2 的 XWayland 指针锁/
+  raw input 未做，推迟到 v1.0 后。**
+- **M2c（原 0.6.0；v1.0 后可选，不阻塞 v1.0）**：嵌套 toplevel DMA-BUF 零拷贝（shm 回退）；
+  SDR 色彩准确性回归。2026-11-13 决策：v1.0 已能正常玩视觉小说，HDR 桌面下 SDR 也未观察到
+  发灰，两项均推迟到 v1.0 后。完整 HDR、混合 GL+Vulkan、跨屏拼接、非嵌套 raw、portal 零拷贝、
+  XWayland DRI3+fence 同样推迟。
 - **动画**：M1c 未做，留 v1.0 前评估。
 - **自定义 effect 的 graphics 最终 pass**：当前只支持 compute + 内置 Lanczos-2；留后续。
 - **4K 源（2×→8K）**：脏矩形/显存/带宽仍需专门评估。
 
-## 4.1 v1.0 之后优化项（2026-11-12）
+## 4.1 v1.0 之后优化项与推迟项（2026-11-13）
 
+完整记录、现象/现状/规避/重启条件见 [post-v1.0.md](post-v1.0.md)。索引：
+
+- **M2bβ2：XWayland 指针锁 + raw input**（含终末地 X11 镜头验收）。原生 Wayland relative 已有；
+  XWayland 仍是 `XWarpPointer`，没有 grab 检测/相对注入/raw。v1.0 前不做。
+- **原 M2c：嵌套 DMA-BUF 零拷贝**：4K 源 shm 约 24fps；720p/800p 视觉小说不受影响。v1.0 后
+  可选优化，方案见 [m2c-plan.md](m2c-plan.md)。
+- **原 M2c：SDR 色彩准确性**：v1.0 已满足（HDR 桌面下 SDR 实测正常）；v1.0 后只做回归，
+  可选 10-bit 宿主输出实验不纳入门槛。
+- **混合 GL + Vulkan**：当前 effect 全是 SPIR-V compute，倾向 no-go；无 GL 独占需求不投入。
+- **多屏连续拼接**：每屏独立 overlay 已够用；不做跨屏连续画面。
+- **非嵌套 X11 raw input**：与 β2 同源；uinput/libei 不适合 v1.0 默认路径。
+- **XWayland 撕裂最终方案**：主路径走嵌套 toplevel 抓取，不走 XShm；旧 `--window` 的 DRI3+fence/
+  portal 方案推迟。
+- **嵌套内完整 HDR 游戏捕获**：嵌套 sway 未 advertise `wp_color_manager_v1`，headless 输出是
+  SDR；v1.0 只保证 HDR 桌面下 SDR 正确。
+- **portal/PipeWire 零拷贝**：继续 `gst-launch` CPU 路径；原生 PipeWire + dmabuf 推迟。
 - **图像光标转发（G5 方案 B）**：当前只转发 `wp_cursor_shape_v1` 的命名形状；Wine 用图像光标，
   所以按钮上仍是箭头。完整方案（sway 快照光标 surface + 宿主 `wl_pointer.set_cursor`）见
   [cursor.md](cursor.md)。
@@ -84,7 +106,7 @@ M2 已拆成 M2a / M2b / M2c，详细计划见 [m2-plan.md](m2-plan.md)。
 
 ## 7. M1 阶段记录、留待后续处理
 
-- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决，M2c 最终处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、present wait 实验、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证。M2a 的 XWayland 混合仍用 XShm；M2c 用 portal 合成帧或 DRI3+fence 做最终方案。临时规避：源程序开启 VSync/垂直同步。
+- **X11/XWayland GPU 窗口捕获撕裂（M1c 未解决；v1.0 后处理）**：源窗口在屏幕上看正常，但 `XShmGetImage` / `XGetImage` / `XCompositeNameWindowPixmap` 读 GPU 更新的窗口 drawable 时可能拿到半帧，overlay 表现为旧帧回退/撕裂。已排除：FIFO/immediate、present wait 实验、XComposite 捕获、焦点隐藏、direct-scanout 阻断。对照实验：mpv OpenGL 未开 vsync 时源窗口捕获和 overlay 都出现数字错位；加 `--opengl-swapinterval=1 --video-sync=display-resample` 后对齐；软件 testpattern 稳定。根因是捕获没有 GPU fence/原子帧保证。v1.0 主路径是嵌套 + toplevel 抓取，不走 XShm，因此不再作为 v1.0 门槛；旧 `--window` 的 portal/DRI3+fence 方案推迟到 v1.0 后，见 [post-v1.0.md](post-v1.0.md) §5。临时规避：源程序开启 VSync/垂直同步，或改用嵌套模式。
 
 - **KDE Wayland + 4K/150% 缩放下 ComboBox 下拉列表不跟随窗口移动**：在 HDMI 4K（150%）上打开下拉框后拖动窗口，选择列表停留在旧位置；DP 100% 屏正常。判断为 Avalonia 12.1.4 在 Wayland 下 popup 定位/缩放的限制，不是本项目的布局问题。M1 不处理；已尝试“窗口移动时自动收起”，但在 Wayland 下收不到可靠的窗口位置变化，效果不成立，已回退。留到 M2 或 Avalonia 升级后复测。
 - **热键改为“实际按一遍”录入**：M1c 设置页目前是文本框输入字符串；后续改成捕获用户真实按键/修饰键，实时显示并校验，避免手写格式错误。M1 暂不修改。

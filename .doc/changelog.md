@@ -1,7 +1,13 @@
 # 更新记录
 
-> **发布标签**：M2b 收尾的验收快照于 2026-11-12 打 `v0.4.2`；`v0.5.0` 仍是 M2b 的正式里程碑
-> 版本号（见 [roadmap.md](roadmap.md) 的版本命名表），本节暂保留 v0.5.0 标题。
+> **发布标签**：M2b 收尾的验收快照于 2026-11-12 打 `v0.4.2`；M2b 正式里程碑 `v0.5.0` 已于
+> 2026-11-13 打 tag（单输出主路径 + 本文档收口）。
+>
+> **v1.0 范围收敛（2026-11-13）**：XWayland 指针锁/raw（M2bβ2）、原 M2c 的嵌套 DMA-BUF
+> 零拷贝与 SDR 色彩准确性、完整 HDR 游戏捕获、混合 GL+Vulkan、跨屏拼接、portal/PipeWire
+> 零拷贝、非嵌套 XWayland DRI3+fence 撕裂均推迟到 v1.0 后，记录在
+> [post-v1.0.md](post-v1.0.md)。v1.0 由 M2b 主路径 + M3 打磨/分发组成；原 M2c 资料保留在
+> [m2c-plan.md](m2c-plan.md)。
 
 ## v0.5.0（2026-11-10）· M2b：单输出嵌套、toplevel 抓取与原生 Wayland 宿主窗口
 
@@ -109,6 +115,19 @@ M2b 把嵌套合成器从“每个游戏窗口一个虚拟输出”改成“一�
 - **图像光标**：Wine 用 `wl_pointer.set_cursor` 的图像，不实现 `wp_cursor_shape_v1` 的命名形状；
   v1.0 只转发命名形状，游戏自定义光标（含“手”）仍显示默认箭头。图像转发方案见
   [`cursor.md`](cursor.md)，列为 v1.0 后优化。
+
+### 未包含（v1.0 前推迟）
+
+- **M2bβ2：XWayland 指针锁 + raw input**：当前 XWayland 仍是 `XWarpPointer` 绝对注入，
+  `XTestFakeRelativeMotionEvent` 未接产品路径，没有 grab 检测/raw 探针；终末地 X11 镜头未验收。
+  git 里的 `97dbbf2 M2bβ2` 是旧 β1 路线验收修复，不是这项。详见
+  [`post-v1.0.md`](post-v1.0.md) §1。
+- **原 M2c：嵌套 DMA-BUF 零拷贝**：4K 源 shm 约 24fps；720p/800p 视觉小说不受影响。v1.0
+  默认走 shm，零拷贝作为 v1.0 后可选优化，见 [`m2c-plan.md`](m2c-plan.md)。
+- **原 M2c：SDR 色彩准确性**：HDR 桌面下 SDR 实测正常；v1.0 保持现状，v1.0 后只做回归；
+  完整 HDR 游戏捕获/10-bit 输出仍推迟（嵌套 sway 未 advertise `wp_color_manager_v1`）。
+- **混合 GL+Vulkan、跨屏连续拼接、非嵌套 X11 raw、portal/PipeWire 零拷贝、XWayland
+  DRI3+fence 撕裂**：均推迟到 v1.0 后，见 [`post-v1.0.md`](post-v1.0.md)。
 
 ## v0.4.0（2026-11-07）· M2a：Wayland layer-shell、XWayland 混合与 portal 捕获
 
