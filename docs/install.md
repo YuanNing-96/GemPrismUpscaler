@@ -29,19 +29,22 @@ tar -xzf GemPrismUpscaler-v1.0.0-linux-x64.tar.gz
 cd GemPrismUpscaler-v1.0.0-linux-x64
 ```
 
+也可以解压同名 `.zip`；`.tar.gz` 和 `.zip` 内容相同。
+
 解压后目录是扁平布局，主要文件：
 
 ```text
 GemPrismUpscaler        主程序（双击启动）
 gemprism.png            图标
-runtime/sway/           私有嵌套合成器运行时
-shaders/                内置超分着色器
+runtime/sway/           私有嵌套合成器：sway/swaymsg/wlroots/装饰 shim
+runtime/gemprism-vkeyboard
+shaders/                内置超分着色器与 Anime4K 许可证
 docs/                   文档与示例
 LICENSE / NOTICE        许可证与第三方说明
 ```
 
 > 如果压缩包在传输过程中丢失了可执行权限，运行一次
-> `chmod +x GemPrismUpscaler runtime/sway/sway runtime/sway/swaymsg`。
+> `chmod +x GemPrismUpscaler runtime/sway/sway runtime/sway/swaymsg runtime/gemprism-vkeyboard`。
 
 ## 3. 首次运行
 

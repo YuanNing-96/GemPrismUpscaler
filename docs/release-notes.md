@@ -31,6 +31,13 @@ v1.0 面向 **KDE Plasma 6 Wayland + XWayland**，主路径是“私有嵌套桌
 - 未处理异常写 `crash-*.txt` 快照。
 - 修复 GUI 嵌套启动未真正执行命令、暂停按钮找不到宿主窗口、正常游戏退出被误报为启动失败。
 
+### 发布包
+
+- 自包含 .NET 运行时，解压后双击 `GemPrismUpscaler` 即可启动。
+- 随包带私有 sway 1.12（含 cursor-hint IPC 补丁）、swaymsg、wlroots 0.20、装饰 shim 和虚拟键盘 helper。
+- 提供 `.tar.gz`、`.zip` 和 SHA-256 校验文件。
+- 随包带用户文档、开发文档、示例、着色器与第三方许可证。
+
 ### 文档
 
 - 文档从隐藏目录迁移到可见的 `docs/`，分为用户文档、开发文档和历史资料。

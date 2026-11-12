@@ -142,6 +142,38 @@ public sealed class NestedSession : IDisposable
     }
 
     /// <summary>
+    /// Locate a bundled wlroots shared library. The release ships a sway built
+    /// against wlroots 0.20; setting LD_LIBRARY_PATH only for that child keeps
+    /// the host app on the system library while making the nested compositor
+    /// independent of the distro's wlroots soname. GEMPRISM_WLROOTS_LIB_DIR can
+    /// point at a custom directory; "off" forces the system library.
+    /// </summary>
+    public static string? ResolveWlrootsLibraryDirectory(string? swayPath)
+    {
+        const string fileName = "libwlroots-0.20.so";
+
+        string? explicitDir = Environment.GetEnvironmentVariable("GEMPRISM_WLROOTS_LIB_DIR");
+        if (explicitDir is "off" or "none" or "0") return null;
+        if (!string.IsNullOrWhiteSpace(explicitDir) && File.Exists(Path.Combine(explicitDir, fileName)))
+            return explicitDir;
+
+        if (!string.IsNullOrWhiteSpace(swayPath) &&
+            swayPath.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            try
+            {
+                string? dir = Path.GetDirectoryName(Path.GetFullPath(swayPath));
+                if (!string.IsNullOrWhiteSpace(dir) && File.Exists(Path.Combine(dir, fileName)))
+                    return dir;
+            }
+            catch { }
+        }
+
+        string bundled = Path.Combine(AppContext.BaseDirectory, "runtime", "sway");
+        return File.Exists(Path.Combine(bundled, fileName)) ? bundled : null;
+    }
+
+    /// <summary>
     /// Pick the render node of the discrete GPU for the nested compositor.
     /// On hybrid systems wlroots otherwise picks the boot (iGPU) device while
     /// GPU clients (Wine/vkd3d, QtWebEngine) allocate buffers on the dGPU;
@@ -305,6 +337,16 @@ public sealed class NestedSession : IDisposable
         {
             Log.Info("nested: xdg-decoration v2 shim not found; " +
                      "nested sway will advertise decoration version 1");
+        }
+
+        string? wlrootsDir = ResolveWlrootsLibraryDirectory(_swayPath);
+        if (wlrootsDir is not null)
+        {
+            string? inheritedLibraryPath = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
+            psi.Environment["LD_LIBRARY_PATH"] = string.IsNullOrWhiteSpace(inheritedLibraryPath)
+                ? wlrootsDir
+                : wlrootsDir + ":" + inheritedLibraryPath;
+            Log.Info($"nested: using bundled wlroots from '{wlrootsDir}'");
         }
 
         bool injectedDevice = false;

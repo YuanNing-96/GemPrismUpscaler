@@ -23,7 +23,7 @@ v1.0 的主路径是**嵌套启动**：在私有虚拟桌面里启动游戏，�
 
 ## 下载与运行
 
-发布包为自包含压缩包，不需要安装 .NET SDK，也不需要 root 权限。
+发布包为自包含压缩包，不需要安装 .NET SDK，也不需要 root 权限。下载 `.tar.gz` 或 `.zip` 后解压。
 
 ```bash
 tar -xzf GemPrismUpscaler-v1.0.0-linux-x64.tar.gz

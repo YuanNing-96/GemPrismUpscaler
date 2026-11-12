@@ -52,8 +52,9 @@ python3 tools/build_shaders.py
 ```text
 runtime/sway/sway
 runtime/sway/swaymsg
+runtime/sway/libwlroots-0.20.so
 runtime/sway/xdg-decoration-v2-shim.so
-runtime/sway/gemprism-vkeyboard
+runtime/gemprism-vkeyboard
 ```
 
 从源码构建（开发用）：

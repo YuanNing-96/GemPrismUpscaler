@@ -24,7 +24,7 @@
 | xdg-decoration-v2-shim | AGPL-3.0-or-later（本项目） | 本项目编写。 |
 | gemprism-vkeyboard | AGPL-3.0-or-later（本项目）；协议文本 MIT | 基于 `virtual-keyboard-unstable-v1.xml` 的 helper。 |
 
-> 发布包应同时提供对应源码获取方式（仓库地址/源码包），以满足 AGPL 与 MIT 组件的源码要求。
+> 发布包包含 `SOURCE.txt`、`runtime/sway/LICENSE` 与 `LICENSE.wlroots`，并在发布页提供源码获取方式，以满足 AGPL 与 MIT 组件要求。
 
 ## 3. 设计与参考
 

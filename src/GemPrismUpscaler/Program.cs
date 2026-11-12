@@ -909,7 +909,11 @@ sealed class Program
             Fail($"sway not found: {sway}");
         else
         {
-            var version = RunTool(swayExe, "--version");
+            var swayEnv = new Dictionary<string, string>();
+            string? libDir = NestedSession.ResolveWlrootsLibraryDirectory(swayExe);
+            if (libDir is not null)
+                swayEnv["LD_LIBRARY_PATH"] = libDir;
+            var version = RunTool(swayExe, swayEnv.Count == 0 ? null : swayEnv, "--version");
             if (version.Ok) Ok($"sway: {version.Text}");
             else Fail($"sway --version failed: {version.Text}");
         }
@@ -1002,6 +1006,10 @@ sealed class Program
     }
 
     private static (bool Ok, string Text) RunTool(string path, params string[] args)
+        => RunTool(path, null, args);
+
+    private static (bool Ok, string Text) RunTool(string path,
+        IReadOnlyDictionary<string, string>? environment, params string[] args)
     {
         try
         {
@@ -1012,6 +1020,9 @@ sealed class Program
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            if (environment is not null)
+                foreach (var (key, value) in environment)
+                    psi.Environment[key] = value;
             foreach (string arg in args) psi.ArgumentList.Add(arg);
             using var process = Process.Start(psi);
             if (process is null) return (false, "process did not start");

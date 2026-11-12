@@ -168,6 +168,7 @@ hotkey = "Alt+Shift+A"
 | `GEMPRISM_DECORATION_SHIM` | 覆盖装饰 shim 路径。 |
 | `GEMPRISM_VKEYBOARD` | 覆盖虚拟键盘 helper 路径。 |
 | `GEMPRISM_WLR_RENDER_DRM_DEVICE` | 指定嵌套合成器使用的 DRM 设备（多 GPU 排障）。 |
+| `GEMPRISM_WLROOTS_LIB_DIR` | 指定嵌套 sway 使用的 wlroots 目录；设为 `off` 强制使用系统库。 |
 | `GEMPRISM_HOST_X11` | 设为 `1` 使用旧 X11 宿主窗口（排障/A-B）。 |
 | `GEMPRISM_DEV` / `GEMPRISM_VALIDATION` | 开发模式 / Vulkan 校验层。 |
 
