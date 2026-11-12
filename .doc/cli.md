@@ -1,251 +1,179 @@
-# GemPrismUpscaler CLI 使用说明
+# GemPrismUpscaler 命令行使用说明
 
-- 适用版本：`0.5.0`（M2b 主路径）；`--backend/--capture/--input/--portal-window/--nested` 已实现，具体以实际 `--help` 为准。
-- 图形界面与 CLI 共用同一份配置：`~/.config/GemPrismUpscaler/config.toml`（`GEMPRISM_CONFIG` 可覆盖）。
-- 本文是发布文档；M2 计划见 [m2-plan.md](m2-plan.md)。
+本文面向 v1.0 用户，说明如何在 KDE Plasma 6 Wayland 下用命令行启动、检查和使用宝石棱镜。
 
----
-
-## 1. 启动方式
-
-```bash
-# 配置界面
-GemPrismUpscaler
-
-# 列出可捕获窗口与显示器
-GemPrismUpscaler --list
-
-# 直接对某个窗口启动超分
-GemPrismUpscaler --window 0x1200001
-
-# 查询运行中的实例
-GemPrismUpscaler --status
-
-# 环境检查 / 配置检查
-GemPrismUpscaler --doctor
-GemPrismUpscaler --config-check
-
-# 版本/帮助
-GemPrismUpscaler --version
-GemPrismUpscaler --help
-```
-
-安装后二进制通常在项目输出目录：
-
-```bash
-./src/GemPrismUpscaler/bin/Release/net10.0/GemPrismUpscaler
-```
-
-GUI 与 CLI 共用单实例约束：默认第二个 GUI 只提示“已在运行”；第二个 CLI 返回非 0。设置里可把第二实例行为改为“激活已有窗口”。
+> **支持范围**：v1.0 只明确支持 KDE Plasma 6 Wayland + XWayland。其他桌面环境可能可用，但不在支持范围内。
 
 ---
 
-## 2. 全局参数
+## 1. 先看图形界面
 
-| 参数 | 说明 |
+大多数用户不需要命令行：直接运行 `GemPrismUpscaler`，在“超分”页选择超分算法、输出显示器和启动方式即可。
+
+命令行主要用于：
+
+- 查看窗口/显示器列表；
+- 脚本化启动；
+- 环境检查与故障排查。
+
+命令都在程序目录下执行：
+
+```bash
+./GemPrismUpscaler --help
+```
+
+---
+
+## 2. 常用命令
+
+| 命令 | 用途 |
 |---|---|
-| `--dev` | 强制开发模式：详细日志、非功能级错误提示、Vulkan 校验层（按配置） |
-| `--doctor` | 检查 KDE/Wayland/XWayland、sway/swaymsg、shim、vkeyboard、Vulkan、配置/日志；有阻塞项返回 3 |
-| `--config-check` | 只加载配置并打印路径/schema/警告/错误，不启动会话 |
-| `--help` | 打印用法 |
-| `--version` | 打印版本 |
+| `--list` | 列出可捕获的 X11/XWayland 窗口和显示器 |
+| `--window <id>` | 直接对某个 X11/XWayland 窗口启动超分 |
+| `--wayland-window` | 在系统弹窗中选择一个原生 Wayland 窗口 |
+| `--wayland-monitor` | 在系统弹窗中选择一块原生 Wayland 屏幕 |
+| `--nested --monitor <name> -- <命令>` | 在私有嵌套合成器里启动游戏/启动器 |
+| `--doctor` | 检查运行环境是否有阻塞问题 |
+| `--config-check` | 检查配置文件是否可读、是否有警告 |
+| `--status` | 查询是否已有实例在运行 |
+| `--version` / `--help` | 版本/帮助 |
 
-环境变量：
+### 2.1 查看窗口和显示器
 
-| 变量 | 说明 |
+```bash
+./GemPrismUpscaler --list
+```
+
+输出里会列出窗口 id、标题、进程、尺寸和显示器名称。窗口 id 支持十进制或 `0x` 十六进制。
+
+### 2.2 对已有 X11/XWayland 窗口启动
+
+```bash
+./GemPrismUpscaler --window 0x1200001 --monitor HDMI-A-1
+```
+
+- `--monitor <name>`：输出到哪块屏幕；名称来自 `--list`。
+- `--effect`：`anime4k-s`（默认）、`anime4k-m`、`anime4k-l`、`anime4k-vl`、`bilinear`。
+- `--stretch`：拉伸铺满；默认保持比例，剩余区域为黑边。
+
+### 2.3 对原生 Wayland 窗口启动
+
+原生 Wayland 没有通用的窗口枚举，必须通过系统选择器：
+
+```bash
+./GemPrismUpscaler --wayland-window --monitor HDMI-A-1
+```
+
+命令会弹出系统窗口选择器；选择后开始捕获和超分。`--wayland-monitor` 选择整块屏幕。
+
+### 2.4 嵌套启动（推荐给窗口化游戏）
+
+嵌套启动会把游戏放进一个私有的虚拟桌面，再由宝石棱镜捕获和超分。适合窗口化运行的视觉小说/2D 游戏。
+
+```bash
+./GemPrismUpscaler --nested --monitor HDMI-A-1 -- <命令...>
+```
+
+`--monitor` 必填：虚拟桌面会使用这块屏幕的分辨率和刷新率。
+
+命令直接按参数启动，**不经过 shell**，所以需要引用的路径要自己加引号：
+
+```bash
+./GemPrismUpscaler --nested --monitor HDMI-A-1 -- \
+  env LUTRIS_SKIP_INIT=1 lutris lutris:rungameid/<id>
+```
+
+> **Lutris 用户注意**：v1.0 不支持让 Lutris 自己把环境变量/启动参数注入嵌套会话。请先关闭 Lutris，再用上面的命令手动启动。
+
+> **排障**：嵌套模式默认按窗口抓取。若个别游戏因此启动异常，可临时设置
+> `GEMPRISM_TOPLEVEL_CAPTURE=0` 回退到旧输出裁剪方案；这是兼容/排障开关，不是默认用法。
+
+---
+
+## 3. 超分算法
+
+| 名称 | 说明 |
 |---|---|
-| `GEMPRISM_CONFIG` | 覆盖配置文件路径 |
-| `GEMPRISM_LOG` | 覆盖日志路径 |
-| `GEMPRISM_DEV=1` | 等价 `--dev` |
-| `GEMPRISM_VALIDATION=1` | 强制开启 Vulkan 校验层 |
-| `GEMPRISM_STATS=/path/stats.csv` | 输出逐帧指标 CSV |
-| `GEMPRISM_TOPLEVEL_CAPTURE=0` | 关闭按 toplevel 抓取，回退旧输出裁剪路径（默认开启） |
+| `anime4k-s` | Anime4K S，默认；速度和效果比较均衡 |
+| `anime4k-m` | Anime4K M，更高质量 |
+| `anime4k-l` | Anime4K L，更高质量，性能开销更大 |
+| `anime4k-vl` | Anime4K VL，实验性最高画质档；帧率不作为保证 |
+| `bilinear` | 双线性回退/对比 |
+
+不指定时使用配置文件里的默认值；新配置默认 `anime4k-s`。
 
 ---
 
-## 3. `--window` 选项
+## 4. 输出显示器
 
-```bash
-GemPrismUpscaler --window <id> [options]
-```
+`--monitor <name>` 指定超分画面输出到哪块屏幕；名称来自 `--list` 的显示器列表。
 
-`<id>` 来自 `--list`，支持十进制或 `0x` 十六进制。
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--monitor <name>` | `auto` | 输出显示器；`auto` 跟随游戏窗口；名称来自 `--list` 的 `monitors:` |
-| `--effect <id>` | 配置/`anime4k-s` | `anime4k-s`、`anime4k-m`、`anime4k-l`、`anime4k-vl`、`bilinear`、自定义 effect id；`anime4k` 是 `anime4k-s` 别名 |
-| `--stretch` | fit | 拉伸铺满，不保持源宽高比 |
-| `--no-follow-focus` | 跟随 | 切到其他程序时保持 overlay（默认失焦收起） |
-| `--no-dirty-rect` | 开启 | 关闭 64px 脏矩形，整帧路径（A/B/回退） |
-| `--output-size <WxH>` | 显示器尺寸 | 调试/基准输出尺寸覆盖，例如 `3840x2160` |
-
-示例：
-
-```bash
-# 默认 Anime4K S + Lanczos，fit
-GemPrismUpscaler --window 0x1200001
-
-# 4K 输出 + Anime4K L
-GemPrismUpscaler --window 0x1200001 --effect anime4k-l --monitor HDMI-A-1
-
-# 4:3 视觉小说拉伸铺满
-GemPrismUpscaler --window 0x1200001 --stretch
-
-# A/B：关闭脏矩形
-GemPrismUpscaler --window 0x1200001 --no-dirty-rect
-
-# 固定输出尺寸（不要求显示器存在）
-GemPrismUpscaler --window 0x1200001 --output-size 3840x2160
-```
+- 嵌套启动时必填，虚拟桌面按该屏幕的物理分辨率和刷新率创建。
+- 已有窗口模式下，省略 `--monitor` 时默认跟随游戏窗口所在屏幕。
 
 ---
 
-## 4. 退出码
+## 5. 诊断与日志
+
+### 5.1 环境检查
+
+```bash
+./GemPrismUpscaler --doctor
+```
+
+检查 KDE/Wayland/XWayland、sway/swaymsg、装饰 shim、虚拟键盘、Vulkan 设备、配置和日志目录。输出 `[ OK ]` / `[WARN]` / `[FAIL]`；有 `[FAIL]` 时返回 3。
+
+### 5.2 配置检查
+
+```bash
+./GemPrismUpscaler --config-check
+```
+
+只加载配置并打印路径、schema、警告和错误，不启动会话。
+
+### 5.3 日志
+
+默认日志文件：
+
+```text
+~/.local/share/GemPrismUpscaler/app.log
+```
+
+可用环境变量覆盖：
+
+```bash
+GEMPRISM_LOG=/path/to/app.log ./GemPrismUpscaler
+```
+
+启动失败、黑屏、没有画面时，先看 `--doctor` 和日志；需要反馈问题时，附上日志文件。
+
+---
+
+## 6. 退出码
 
 | 码 | 含义 |
 |---|---|
-| 0 | 成功/正常结束 |
-| 1 | 致命错误；`--status` 未运行 |
-| 2 | 参数错误/用法错误 |
-| 3 | 指定窗口未找到 |
-| 4 | 已有实例在运行，第二个 CLI 被拒绝 |
-| 5 | 指定显示器不存在 |
-
----
-
-## 5. 配置相关
-
-配置文件：`~/.config/GemPrismUpscaler/config.toml`；损坏时自动备份为 `config.toml.bad-<时间>` 并回退默认。
-
-常用段：
-
-```toml
-[general]
-second_instance = "notify"   # notify | activate
-close_action = "exit"        # exit | tray
-follow_focus = true
-remember_last = true
-auto_refresh_windows = false
-refresh_interval_ms = 1000
-
-[hotkey]
-toggle_overlay = "Alt+Shift+A"
-
-[logging]
-path = ""
-level = "info"
-
-[display]
-monitor = "auto"
-
-[effect]
-default = "anime4k-s"
-scaling = "fit"              # fit | stretch
-dirty_rect = true
-
-[tray]
-enabled = true
-
-[diagnostics]
-developer_mode = false
-
-[[profile]]
-name = "galgame"
-class = ["game.exe"]
-exe = ["*/game.exe"]
-effect = "anime4k-l"
-scaling = "fit"
-monitor = "auto"
-```
-
-优先级：CLI 显式参数 > Profile 匹配 > `[last]`（`remember_last`）> 设置默认 > 内置默认。
-
----
-
-## 6. M2a/M2b 参数（0.5.0）
-
-> 以下参数已实现；具体以 `--help` 为准。
-
-| 参数 | 取值 | 说明 |
-|---|---|---|
-| `--backend <mode>` | `auto`/`x11`/`wayland` | 选择呈现/捕获平台；`auto` 按会话和源类型选择 |
-| `--capture <mode>` | `auto`/`x11`/`portal` | `x11` = XShm；`portal` = ScreenCast + PipeWire（原生 Wayland；`--window` 路径仍回退 X11，原生窗口用 `--portal-window`） |
-| `--input <mode>` | `auto`/`passthrough`/`forward` | `passthrough` = 空 input region；`forward` = 接收后 `XSendEvent` |
-| `--portal-window` | 无值 | 原生 Wayland 窗口：**每次启动都打开系统选择器** |
-| `--portal-monitor` | 无值 | 原生 Wayland 显示器捕获 |
-| `--portal-reuse-token` | 无值 | 复用 `portal.token` 中的上次窗口（默认不复用，避免跳过选择器） |
-
-配置对应：
-
-```toml
-[capture]
-backend = "auto"   # auto | x11 | wayland
-mode = "auto"      # auto | x11 | portal
-
-[input]
-mode = "auto"      # auto | passthrough | forward
-```
-
-`auto` 规则（M2a）：
-
-- X11 会话 → X11 捕获 + X11 overlay。
-- Wayland 会话 + XWayland 窗口 → X11 捕获 + Wayland overlay + `forward` 指针转发。
-- Wayland 会话 + 原生 Wayland 全屏窗口 → portal 捕获 + 空 input region 穿透。
-- 原生 Wayland 窗口化：M2a 只显示，输入映射由 M2b 嵌套解决；UI 会提示。
-- 原生 Wayland **跟随焦点**（切到其他程序自动收起）不在 M2a：portal 不提供源窗口身份/焦点；M2b 嵌套合成器解决。M2a 用 `Alt+Shift+A` 或托盘手动收起。
-- 原生 Wayland 热键：首次会话会弹 `GlobalShortcuts` 授权；KDE 若把快捷键存成 `none`，需在“系统设置 → 快捷键 → GemPrismUpscaler”里把“显示/隐藏…”设为 `Alt+Shift+A`。
-
-```bash
-# M2a 原生 Wayland：默认每次打开系统选择器
-GemPrismUpscaler --portal-window --monitor HDMI-A-1
-GemPrismUpscaler --portal-monitor --monitor HDMI-A-1
-
-# 固定复用上次选择（跳过选择器；仅在明确知道目标窗口时使用）
-GemPrismUpscaler --portal-window --monitor HDMI-A-1 --portal-reuse-token
-```
-
----
-
-## 7. M2b 嵌套命令（已实现，单输出路线）
-
-> `--monitor` 必填；嵌套桌面按该显示器的物理分辨率/刷新率快照。`--nested-size` 已废弃，
-> 传入会被忽略。按 toplevel 抓取是默认主路径；`GEMPRISM_TOPLEVEL_CAPTURE=0` 可回退旧输出裁剪。
-
-```bash
-# 启动一个游戏/启动器到私有嵌套合成器
-GemPrismUpscaler --nested --monitor HDMI-A-1 -- <command...>
-
-# 只启动嵌套会话，写出 WAYLAND_DISPLAY/DISPLAY/token 供 Lutris/Steam 使用
-GemPrismUpscaler --nested-session --monitor HDMI-A-1
-
-# 探针：只起嵌套会话并打印输出/窗口信息
-GemPrismUpscaler --nested-probe --monitor HDMI-A-1
-
-# wrapper：把最终游戏进程送进已有嵌套会话
-gemprism-nested-run -- <command...>
-```
-
-Lutris 推荐用 per-game 环境变量/wrapper，把 `WAYLAND_DISPLAY`/`DISPLAY`/`GEMPRISM_NESTED_TOKEN` 传给最终游戏进程；Steam/Heroic 用启动选项 wrapper 做 best-effort。`--sway <path>` 可覆盖内置 sway。
-
----
-
-## 8. 常见问题
-
-- **`--list` 看不到原生 Wayland 窗口**：Wayland 没有通用窗口枚举；M2a 用 portal 系统选择器（`--portal-window`）。`--list` 只列 X11/XWayland 窗口。
-- **热键无反应**：XWayland 焦点用 `XGrabKey`；原生 Wayland 用 portal GlobalShortcuts。首次会弹授权；若 KDE 日志显示 `trigger='none'`，到“系统设置 → 快捷键 → GemPrismUpscaler”手动分配 `Alt+Shift+A`。
-- **画面静止时 fps 为 0**：预期行为；脏矩形/静止画面不重复 capture/present。
-- **4K 输出 fps 低**：先确认源窗口是否 GPU 更新（XShm 捕获可能慢）、是否开启 HDR/高刷、是否使用 VL 等重 effect；用 `--output-size` 和 `GEMPRISM_STATS` 排查。
-- **第二实例**：默认只提示错误；设置可改为激活已有 GUI；第二个 CLI 仍返回 4。
-
----
-
-## 9. 退出码
-
-| 码 | 含义 |
-|---|---|
-| 0 | 成功（`--help`/`--version`/`--doctor` 无阻塞/`--config-check` 无错误/会话正常退出） |
+| 0 | 成功 |
 | 1 | 运行或配置失败 |
 | 2 | 参数/用法错误 |
-| 3 | 依赖或环境检查失败（`--doctor`） |
-| 4 | 已有实例在运行（第二实例） |
+| 3 | 环境检查失败（`--doctor`） |
+| 4 | 已有实例在运行 |
+
+---
+
+## 7. 常见问题
+
+**`--list` 看不到原生 Wayland 窗口**
+原生 Wayland 没有通用窗口枚举，请用 `--wayland-window` 让系统选择器选择。
+
+**提示已有实例在运行**
+默认只允许一个实例。先退出已有实例，或在设置里把“重复打开时的行为”改为“激活已有窗口”。
+
+**热键没反应**
+v1.0 固定使用 `Alt+Shift+A`，暂不支持修改。若 KDE 系统占用了该快捷键，请到系统设置里释放冲突。
+
+**画面静止时 fps 为 0**
+这是正常行为：静止画面不会重复捕获/呈现。
+
+**4K 输出帧率低**
+先确认源窗口的分辨率和刷新率；高分辨率源 + 高画质算法会明显增加 GPU 开销。可先改用 `anime4k-s` 或 `bilinear` 排查。

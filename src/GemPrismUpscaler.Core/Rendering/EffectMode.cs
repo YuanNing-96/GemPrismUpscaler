@@ -50,12 +50,12 @@ public static class EffectModeExtensions
     /// <summary>User-facing label for the UI and logs.</summary>
     public static string DisplayName(this EffectMode mode) => mode switch
     {
-        EffectMode.Bilinear => "双线性（M0a）",
-        EffectMode.Anime4KS => "Anime4K S 2× + Lanczos",
-        EffectMode.Anime4KM => "Anime4K M 2× + Lanczos",
-        EffectMode.Anime4KL => "Anime4K L 2× + Lanczos",
-        EffectMode.Anime4KVL => "Anime4K VL 2× + Lanczos",
-        EffectMode.Custom => "自定义 effect",
+        EffectMode.Bilinear => "双线性",
+        EffectMode.Anime4KS => "Anime4K S",
+        EffectMode.Anime4KM => "Anime4K M",
+        EffectMode.Anime4KL => "Anime4K L",
+        EffectMode.Anime4KVL => "Anime4K VL",
+        EffectMode.Custom => "自定义算法",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
 

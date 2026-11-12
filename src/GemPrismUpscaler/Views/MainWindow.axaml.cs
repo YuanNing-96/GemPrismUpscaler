@@ -78,6 +78,7 @@ public partial class MainWindow : Window
 
         Opened += (_, _) =>
         {
+            UpdateLaunchUi();
             RefreshWindows();
             RefreshProfiles();
             RefreshEffects();
@@ -115,10 +116,13 @@ public partial class MainWindow : Window
 
     private void WireEvents()
     {        RefreshButton.Click += (_, _) => RefreshWindows();
-        StartButton.Click += (_, _) => StartSession();
+        StartButton.Click += (_, _) => StartFromUi();
         PortalButton.Click += (_, _) => StartPortalSession();
         NestedStartButton.Click += (_, _) => StartNestedSession();
         StopButton.Click += (_, _) => StopSession("已停止");
+        PauseButton.Click += (_, _) => TogglePause();
+        LaunchModeCombo.SelectionChanged += (_, _) => UpdateLaunchUi();
+        WindowBackendCombo.SelectionChanged += (_, _) => UpdateLaunchUi();
         ExitButton.Click += (_, _) =>
         {
             _exitRequested = true;
@@ -126,7 +130,6 @@ public partial class MainWindow : Window
         };
         WindowList.SelectionChanged += (_, _) =>
         {
-            ApplySelectedProfile();
             UpdateTrayState();
         };
         ErrorCloseButton.Click += (_, _) => ErrorBanner.IsVisible = false;
@@ -140,7 +143,7 @@ public partial class MainWindow : Window
                 if (LogText.IsLoaded) LogText.CaretIndex = LogText.Text?.Length ?? 0;
             }, DispatcherPriority.Background);
         };
-        LogTabOpenButton.Click += (_, _) => OpenPath(Log.Path);
+        LogTabOpenButton.Click += (_, _) => OpenLogDirectory();
         LogTabClearButton.Click += (_, _) =>
         {
             LogText.Text = string.Empty;
@@ -160,7 +163,7 @@ public partial class MainWindow : Window
         SaveSettingsButton.Click += (_, _) => SaveSettings();
         ResetSettingsButton.Click += (_, _) => ResetSettings();
         OpenConfigDirButton.Click += (_, _) => OpenPath(AppPaths.ConfigDirectory);
-        OpenLogButton.Click += (_, _) => OpenPath(Log.Path);
+        OpenLogButton.Click += (_, _) => OpenLogDirectory();
         ReloadProfilesButton.Click += (_, _) => ReloadProfilesFromDisk();
         OpenProfileConfigButton.Click += (_, _) => OpenConfigFile();
         ReloadEffectsButton.Click += (_, _) => ReloadEffects();
@@ -186,14 +189,17 @@ public partial class MainWindow : Window
 
     private void PopulateEffectCombos()
     {
-        var all = EffectRegistry.All;
-        EffectCombo.ItemsSource = all;
-        DefaultEffectCombo.ItemsSource = all;
+        var builtIns = EffectRegistry.All.Where(e => e.IsBuiltIn).ToList();
+        EffectCombo.ItemsSource = builtIns;
+        DefaultEffectCombo.ItemsSource = builtIns;
     }
 
     private static void SelectEffect(ComboBox combo, string id)
     {
-        combo.SelectedItem = EffectRegistry.Find(id) ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
+        var effect = EffectRegistry.Find(id);
+        combo.SelectedItem = effect is { IsBuiltIn: true }
+            ? effect
+            : EffectRegistry.BuiltIn(EffectMode.Anime4KS);
     }
 
     private void ApplyConfigDefaults()
@@ -207,6 +213,7 @@ public partial class MainWindow : Window
 
     private void LoadSettingsIntoControls()
     {
+        _config.Hotkey.ToggleOverlay = HotkeyBinding.Default.ToString();
         HotkeyBox.Text = _config.Hotkey.ToggleOverlay;
         NestedCommandBox.Text = _config.Nested.Command;
         SecondInstanceCombo.SelectedIndex =
@@ -215,16 +222,19 @@ public partial class MainWindow : Window
             string.Equals(_config.General.CloseAction, "tray", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         FollowFocusSettingCheck.IsChecked = _config.General.FollowFocus;
         RememberLastCheck.IsChecked = _config.General.RememberLast;
-        AutoRefreshCheck.IsChecked = _config.General.AutoRefreshWindows;
+        AutoRefreshCheck.IsChecked = true;
+        _config.General.AutoRefreshWindows = true;
         RefreshIntervalBox.Text = _config.General.RefreshIntervalMs.ToString();
         TrayEnabledCheck.IsChecked = _config.Tray.Enabled;
         SelectEffect(DefaultEffectCombo, _config.Effect.Default);
         DefaultScalingCombo.SelectedIndex =
             string.Equals(_config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         DirtyRectCheck.IsChecked = _config.Effect.DirtyRect;
-        LogPathBox.Text = _config.Logging.Path;
+        LogPathBox.Text = string.IsNullOrWhiteSpace(_config.Logging.Path)
+            ? AppPaths.DefaultLogPath
+            : _config.Logging.Path;
         DeveloperModeCheck.IsChecked = _config.Diagnostics.DeveloperMode;
-        HotkeyHint.Text = $"热键：{_config.Hotkey.ToggleOverlay} 显示/隐藏覆盖层";
+        HotkeyHint.Text = "热键：Alt+Shift+A（v1.0 暂不支持修改）";
         ValidationStatusText.Text = DiagnosticsRuntime.ValidationLayerEnabled ? "开启（下次启动生效）" : "关闭";
     }
 
@@ -254,7 +264,7 @@ public partial class MainWindow : Window
         }
 
         FollowFocusCheck.IsChecked = _config.General.FollowFocus;
-        HotkeyHint.Text = $"热键：{_config.Hotkey.ToggleOverlay} 显示/隐藏覆盖层";
+        HotkeyHint.Text = "热键：Alt+Shift+A（v1.0 暂不支持修改）";
         ApplyTraySettings();
     }
 
@@ -292,6 +302,8 @@ public partial class MainWindow : Window
         interval = Math.Clamp(interval, 250, 5000);
 
         string logPath = (LogPathBox.Text ?? string.Empty).Trim();
+        if (string.Equals(logPath, AppPaths.DefaultLogPath, StringComparison.Ordinal))
+            logPath = string.Empty;
         if (logPath.Length > 0)
         {
             try
@@ -306,12 +318,12 @@ public partial class MainWindow : Window
             }
         }
 
-        _config.Hotkey.ToggleOverlay = hotkey.ToString();
+        _config.Hotkey.ToggleOverlay = HotkeyBinding.Default.ToString();
         _config.General.SecondInstance = SecondInstanceCombo.SelectedIndex == 1 ? "activate" : "notify";
         _config.General.CloseAction = CloseActionCombo.SelectedIndex == 1 ? "tray" : "exit";
         _config.General.FollowFocus = FollowFocusSettingCheck.IsChecked != false;
         _config.General.RememberLast = RememberLastCheck.IsChecked != false;
-        _config.General.AutoRefreshWindows = AutoRefreshCheck.IsChecked == true;
+        _config.General.AutoRefreshWindows = true;
         _config.General.RefreshIntervalMs = interval;
         _config.Tray.Enabled = TrayEnabledCheck.IsChecked != false;
         if (CloseActionCombo.SelectedIndex == 1)
@@ -446,7 +458,7 @@ public partial class MainWindow : Window
             _tray.StartRequested += () => Dispatcher.UIThread.Post(() =>
             {
                 ShowFromTray();
-                StartSession();
+                StartFromUi();
             });
             _tray.StopRequested += () => Dispatcher.UIThread.Post(() => StopSession("托盘停止"));
             _tray.ToggleRequested += () => Dispatcher.UIThread.Post(ToggleOverlayFromTray);
@@ -517,10 +529,6 @@ public partial class MainWindow : Window
                 ? _windows.FirstOrDefault(w => w.WindowId == id) ?? _windows.FirstOrDefault()
                 : _windows.FirstOrDefault();
 
-            string status = $"发现 {_windows.Count} 个窗口 · {_monitors.Count} 台显示器";
-            if (!string.Equals(StatusText.Text, status, StringComparison.Ordinal))
-                StatusText.Text = status;
-
             if (!quiet)
             {
                 AppendLog($"refresh: {_windows.Count} windows, {_monitors.Count} monitors");
@@ -543,16 +551,16 @@ public partial class MainWindow : Window
             !string.Equals(PreferredMonitor, "auto", StringComparison.OrdinalIgnoreCase))
             previous = PreferredMonitor;
 
-        var choices = new List<MonitorChoice>
-        {
-            new(null, "自动（跟随游戏窗口）")
-        };
-        choices.AddRange(_monitors.Select(m => new MonitorChoice(
+        var choices = _monitors.Select(m => new MonitorChoice(
             m.Name,
-            $"{m.Name} · {m.Width}×{m.Height}{(m.Primary ? "（主屏）" : string.Empty)}")));
+            $"{m.Name} · {m.Width}×{m.Height}{(m.Primary ? "（主屏）" : string.Empty)}")).ToList();
 
         MonitorCombo.ItemsSource = choices;
-        MonitorCombo.SelectedItem = choices.FirstOrDefault(c => c.Name == previous) ?? choices[0];
+        if (choices.Count == 0)
+            return;
+        MonitorCombo.SelectedItem = choices.FirstOrDefault(c => c.Name == previous)
+                                   ?? choices.FirstOrDefault(c => _monitors.First(m => m.Name == c.Name).Primary)
+                                   ?? choices[0];
 
         string? defaultMonitor = (DefaultMonitorCombo.SelectedItem as MonitorChoice)?.Name;
         DefaultMonitorCombo.ItemsSource = choices;
@@ -668,7 +676,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
+        var mode = string.Equals(_config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+            ? ScalingMode.Stretch : ScalingMode.Fit;
         var effect = EffectCombo.SelectedItem as EffectDefinition
                      ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
         if (!effect.IsAvailable)
@@ -722,6 +731,7 @@ public partial class MainWindow : Window
         PortalButton.IsEnabled = false;
         NestedStartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
+        UpdatePauseButton();
         StatusText.Text = $"正在启动嵌套会话：{monitor.Name} {monitor.Width}x{monitor.Height}…";
         AppendLog($"nested start: monitor={monitor.Name} size={monitor.Width}x{monitor.Height} " +
                   $"effect={effect.Id} command={commandText}");
@@ -743,6 +753,7 @@ public partial class MainWindow : Window
                         return;
                     }
                     _nestedStarting = false;
+                    UpdatePauseButton();
                     StatusText.Text = $"运行中：嵌套（{monitor.Name}，{effect.DisplayName}）";
                     AppendLog("nested session started");
                     UpdateTrayState();
@@ -776,10 +787,68 @@ public partial class MainWindow : Window
         });
     }
 
+    private void StartFromUi()
+    {
+        if (LaunchModeCombo.SelectedIndex == 1)
+            StartNestedSession();
+        else if (WindowBackendCombo.SelectedIndex == 1)
+            StartPortalSession();
+        else
+            StartSession();
+    }
+
+    private void UpdateLaunchUi()
+    {
+        bool nested = LaunchModeCombo.SelectedIndex == 1;
+        bool existing = !nested;
+        bool wayland = existing && WindowBackendCombo.SelectedIndex == 1;
+
+        WindowBackendPanel.IsVisible = existing;
+        WindowBackendCombo.IsVisible = existing;
+        WindowList.IsVisible = existing && !wayland;
+        NestedPanel.IsVisible = nested;
+        WaylandPanel.IsVisible = wayland;
+        StartButton.Content = wayland ? "选择 Wayland 窗口" : "开始超分";
+    }
+
+    private void TogglePause()
+    {
+        if (_nestedUpscale is not null)
+            _nestedUpscale.RequestToggleUpscale();
+        else if (_session is not null)
+            _session.RequestToggleVisibility();
+        else if (_portalSession is not null)
+            _portalSession.RequestToggleVisibility();
+        else
+            return;
+        DispatcherTimer.RunOnce(UpdatePauseButton, TimeSpan.FromMilliseconds(350));
+    }
+
+    private void UpdatePauseButton()
+    {
+        bool active = _session is not null || _portalSession is not null || _nestedUpscale is not null;
+        PauseButton.IsEnabled = active;
+        if (_nestedUpscale is not null)
+            PauseButton.Content = _nestedUpscale.IsUpscaleMode ? "暂停超分" : "继续超分";
+        else if (_session is not null)
+            PauseButton.Content = _session.IsOverlayVisible ? "暂停超分" : "继续超分";
+        else if (_portalSession is not null)
+            PauseButton.Content = _portalSession.IsOverlayVisible ? "暂停超分" : "继续超分";
+        else
+            PauseButton.Content = "暂停超分";
+    }
+
+    private void OpenLogDirectory()
+    {
+        string? directory = Path.GetDirectoryName(Log.Path);
+        OpenPath(string.IsNullOrWhiteSpace(directory) ? AppPaths.DefaultLogPath : directory);
+    }
+
     private void StartPortalSession()
     {
         StopSession("切换为 Wayland 门户");
-        var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
+        var mode = string.Equals(_config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+            ? ScalingMode.Stretch : ScalingMode.Fit;
         var effect = EffectCombo.SelectedItem as EffectDefinition
                      ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
         if (!effect.IsAvailable)
@@ -801,6 +870,7 @@ public partial class MainWindow : Window
         PortalButton.IsEnabled = false;
         NestedStartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
+        UpdatePauseButton();
         StatusText.Text = "请在系统对话框中选择要共享的窗口…";
         AppendLog("portal: waiting for system window picker");
 
@@ -829,6 +899,7 @@ public partial class MainWindow : Window
                         PortalButton.IsEnabled = true;
                         NestedStartButton.IsEnabled = true;
                         StopButton.IsEnabled = false;
+                        UpdatePauseButton();
                         StatusText.Text = "Wayland 门户启动失败";
                     }
                     AppendLog($"portal start error: {ex.Message}");
@@ -848,7 +919,8 @@ public partial class MainWindow : Window
         }
 
         StopSession("重新启动");
-        var mode = StretchCheck.IsChecked == true ? ScalingMode.Stretch : ScalingMode.Fit;
+        var mode = string.Equals(_config.Effect.Scaling, "stretch", StringComparison.OrdinalIgnoreCase)
+            ? ScalingMode.Stretch : ScalingMode.Fit;
         var effect = EffectCombo.SelectedItem as EffectDefinition
                      ?? EffectRegistry.BuiltIn(EffectMode.Anime4KS);
         if (!effect.IsAvailable)
@@ -880,8 +952,8 @@ public partial class MainWindow : Window
         var session = new UpscaleSession(info, mode, effect.Mode, monitorName, 0, 0, hotkey, effect,
             backend, pointerPassthrough)
         {
-            FollowFocus = FollowFocusCheck.IsChecked != false,
-            DirtyRectEnabled = _activeProfile?.DirtyRect ?? _config.Effect.DirtyRect
+            FollowFocus = _config.General.FollowFocus,
+            DirtyRectEnabled = _config.Effect.DirtyRect
         };
         session.Message += OnSessionMessage;
         try
@@ -892,6 +964,7 @@ public partial class MainWindow : Window
             StartButton.IsEnabled = false;
             NestedStartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
+            UpdatePauseButton();
             StatusText.Text = $"运行中：{_runningTitle}（显示器：{session.MonitorName}，{hotkey} 显示/隐藏）";
             AppendLog($"started: 0x{info.WindowId:x} '{info.Title}' {info.Width}x{info.Height} " +
                       $"mode={mode} effect={session.EffectName} monitor={session.MonitorName} hotkey={hotkey}" +
@@ -991,6 +1064,7 @@ public partial class MainWindow : Window
         PortalButton.IsEnabled = true;
         NestedStartButton.IsEnabled = true;
         StopButton.IsEnabled = false;
+        UpdatePauseButton();
         if (StatusText is not null) StatusText.Text = status ?? "已停止";
         UpdateTrayState();
     }
@@ -1006,6 +1080,7 @@ public partial class MainWindow : Window
                 string text = $"运行中：嵌套（{_nestedMonitorName ?? "?"}，{nested.EffectName}）";
                 if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
                     StatusText.Text = text;
+                UpdatePauseButton();
                 return;
             }
             string? nestedReason = nested.ExitReason;
@@ -1023,6 +1098,7 @@ public partial class MainWindow : Window
                 string text = $"运行中：Wayland 门户（{portal.OverlayDescription}）";
                 if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
                     StatusText.Text = text;
+                UpdatePauseButton();
                 return;
             }
             string portalReason = portal.ExitReason;
@@ -1042,6 +1118,7 @@ public partial class MainWindow : Window
             string text = $"运行中：{_runningTitle}（显示器：{session.MonitorName}，{hotkey} 显示/隐藏）";
             if (!string.Equals(StatusText.Text, text, StringComparison.Ordinal))
                 StatusText.Text = text;
+            UpdatePauseButton();
             return;
         }
 
@@ -1090,7 +1167,6 @@ public partial class MainWindow : Window
 
         _config.Profile = result.Config.Profile;
         RefreshProfiles();
-        ApplySelectedProfile();
         ProfileStatusText.Text = $"已从磁盘重新加载 {_config.Profile.Count} 个 Profile";
     }
 

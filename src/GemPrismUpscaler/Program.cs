@@ -52,6 +52,7 @@ sealed class Program
 
         if (args.Length > 0 && (args[0] == "--list" || args[0] == "--window" ||
                                 args[0] == "--portal-window" || args[0] == "--portal-monitor" ||
+                                args[0] == "--wayland-window" || args[0] == "--wayland-monitor" ||
                                 args[0] == "--nested" || args[0] == "--nested-session" ||
                                 args[0] == "--nested-probe" ||
                                 args[0] == "--doctor" || args[0] == "--config-check" ||
@@ -149,7 +150,8 @@ sealed class Program
             if (args[0] == "--nested-probe")
                 return RunNestedProbe(args);
 
-            if (args.Any(a => a == "--portal-window" || a == "--portal-monitor"))
+            if (args.Any(a => a == "--portal-window" || a == "--portal-monitor" ||
+                              a == "--wayland-window" || a == "--wayland-monitor"))
                 return RunPortal(args);
 
             using var display = new X11Display();
@@ -560,7 +562,8 @@ sealed class Program
             EnsureConfiguration(args);
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
             {
-                Console.Error.WriteLine("--portal-window requires a Wayland session (WAYLAND_DISPLAY unset)");
+                Console.Error.WriteLine("Wayland window capture requires a Wayland session " +
+                                        "(WAYLAND_DISPLAY unset)");
                 return 1;
             }
 
@@ -580,7 +583,7 @@ sealed class Program
                 !string.Equals(Config.Display.Monitor, "auto", StringComparison.OrdinalIgnoreCase))
                 monitorName = Config.Display.Monitor;
 
-            var sourceType = args.Any(a => a == "--portal-monitor")
+            var sourceType = args.Any(a => a == "--portal-monitor" || a == "--wayland-monitor")
                 ? PortalSourceType.Monitor
                 : PortalSourceType.Window;
 
@@ -642,56 +645,35 @@ sealed class Program
               GemPrismUpscaler                          launch the configuration UI
               GemPrismUpscaler --list                   list capturable windows and monitors
               GemPrismUpscaler --window <id> [options]  start a session directly
-              GemPrismUpscaler --portal-window [options] start a native Wayland portal session
-              GemPrismUpscaler --portal-monitor [options] capture a monitor via portal
+              GemPrismUpscaler --wayland-window [options]
+                                            pick a native Wayland window
+              GemPrismUpscaler --wayland-monitor [options]
+                                            pick a native Wayland monitor
               GemPrismUpscaler --nested [options] -- <command>
                                                         run a command in private nested sway
-              GemPrismUpscaler --nested-session [options]
-                                                        keep a nested session for gemprism-nested-run
-              GemPrismUpscaler --nested-probe [options] probe nested outputs/windows
               GemPrismUpscaler --status                 query the running instance
               GemPrismUpscaler --doctor                 check the KDE/Wayland/nested runtime
               GemPrismUpscaler --config-check           load config and print warnings
               GemPrismUpscaler --version                print version
               GemPrismUpscaler --help                   this text
 
-            global options:
-              --dev                     force developer mode (debug logs, diagnostics)
-
             options for --window:
-              --monitor <name>          output monitor (auto follows the game by default)
+              --monitor <name>          output monitor (default: follow the game window)
               --effect anime4k-s|anime4k-m|anime4k-l|anime4k-vl|bilinear
-                                        default anime4k-s; 'anime4k' is an alias for s
-              --stretch                 stretch instead of preserving aspect ratio
-              --no-follow-focus         keep the overlay when the game loses focus
-              --no-dirty-rect           disable dirty-tile rendering (A/B baseline)
-              --output-size <WxH>       debug/benchmark output override (e.g. 3840x2160)
-              --backend auto|x11|wayland
-                                        presentation backend (auto by session)
-              --capture auto|x11|portal
-                                        capture backend (portal is native Wayland, M2a)
-              --input auto|passthrough|forward
-                                        Wayland pointer handling (forward = XSendEvent)
-
-            options for --portal-window / --portal-monitor:
-              --monitor <name>          layer-shell output (auto by default)
-              --effect <id>             built-in or custom effect
-              --stretch                 stretch instead of preserving aspect ratio
-              --portal-reuse-token      skip the picker and reuse the last window
-
-            options for --nested / --nested-session:
-              --monitor <name>          target monitor (required for nested; desktop =
-                                        that monitor's physical resolution)
-              --sway <path>             override the pinned sway binary
-              --nested-main <pid|app_id|title>
-                                        manually select the main window
-              --nested-size <WxH>       deprecated/ignored; nested desktop follows monitor
-              --effect <id>             built-in or custom effect
+                                        default anime4k-s
               --stretch                 stretch instead of preserving aspect ratio
 
-            options for --nested-probe:
-              --monitor <name>          monitor whose mode the probe reports
-              --sway <path>             override the pinned sway binary
+            options for --wayland-window / --wayland-monitor:
+              --monitor <name>          KDE output for the overlay
+              --effect anime4k-s|anime4k-m|anime4k-l|anime4k-vl|bilinear
+                                        default anime4k-s
+              --stretch                 stretch instead of preserving aspect ratio
+
+            options for --nested:
+              --monitor <name>          target monitor (required for nested)
+              --effect anime4k-s|anime4k-m|anime4k-l|anime4k-vl|bilinear
+                                        default anime4k-s
+              --stretch                 stretch instead of preserving aspect ratio
 
             exit codes:
               0  success

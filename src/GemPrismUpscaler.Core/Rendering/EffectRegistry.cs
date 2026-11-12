@@ -62,15 +62,15 @@ public static class EffectRegistry
             AddBuiltIn(all, byId, new EffectDefinition
             {
                 Id = "bilinear",
-                DisplayName = "双线性（M0a）",
+                DisplayName = "双线性",
                 Kind = EffectKind.Bilinear,
                 Mode = EffectMode.Bilinear
             });
 
-            AddMode(all, byId, EffectMode.Anime4KS, "anime4k-s", "Anime4K S 2× + Lanczos");
-            AddMode(all, byId, EffectMode.Anime4KM, "anime4k-m", "Anime4K M 2× + Lanczos");
-            AddMode(all, byId, EffectMode.Anime4KL, "anime4k-l", "Anime4K L 2× + Lanczos");
-            AddMode(all, byId, EffectMode.Anime4KVL, "anime4k-vl", "Anime4K VL 2× + Lanczos（实验）");
+            AddMode(all, byId, EffectMode.Anime4KS, "anime4k-s", "Anime4K S");
+            AddMode(all, byId, EffectMode.Anime4KM, "anime4k-m", "Anime4K M");
+            AddMode(all, byId, EffectMode.Anime4KL, "anime4k-l", "Anime4K L");
+            AddMode(all, byId, EffectMode.Anime4KVL, "anime4k-vl", "Anime4K VL");
 
             LoadCustom(all, byId);
 

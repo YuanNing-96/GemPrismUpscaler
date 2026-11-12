@@ -121,6 +121,19 @@ public sealed class NestedUpscaleSession : IDisposable
     }
     public string EffectName => _effect.DisplayName;
 
+    /// <summary>
+    /// Toggle the focused nested window between upscale and original mode.
+    /// The GUI's "pause/resume super-resolution" button uses this instead of
+    /// the A hotkey.
+    /// </summary>
+    public void RequestToggleUpscale()
+    {
+        long id = Interlocked.Read(ref _focusedId);
+        if (id == 0) return;
+        Interlocked.Exchange(ref _toggleRequestedId, id);
+        Interlocked.Exchange(ref _toggleRequested, 1);
+    }
+
     public string OverlayDescription
     {
         get
