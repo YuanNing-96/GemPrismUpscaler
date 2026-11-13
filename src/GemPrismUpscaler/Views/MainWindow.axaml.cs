@@ -60,6 +60,8 @@ public partial class MainWindow : Window
             _instance.ActivationRequested = () => Dispatcher.UIThread.Post(ActivateFromSecondInstance);
         }
 
+        if (OperatingSystem.IsLinux())
+            WaylandProperties.SetAppId(this, PortalAppId.WindowAppId);
         Title = $"宝石棱镜 {AppInfo.DisplayName}";
         try
         {

@@ -65,6 +65,9 @@ sealed class Program
         }
 
         EnsureConfiguration(args);
+        // Install the desktop entry/icon before Avalonia creates the Wayland
+        // toplevel, so KDE can resolve the taskbar and titlebar icon.
+        PortalAppId.EnsureDesktopFile();
         Log.WriteSessionHeader("gui", args, Config);
 
         // GUI launch. A second GUI instance must only report an error or, when

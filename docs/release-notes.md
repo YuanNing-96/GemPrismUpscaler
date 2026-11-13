@@ -37,6 +37,7 @@ v1.0 面向 **KDE Plasma 6 Wayland + XWayland**，主路径是“私有嵌套桌
 - 随包带私有 sway 1.12（含 cursor-hint IPC 补丁）、swaymsg、wlroots 0.20 及其必要依赖、装饰 shim 和虚拟键盘 helper。
 - 提供 `.tar.gz`、`.zip` 和 SHA-256 校验文件。
 - 随包只带使用说明和示例；开发/历史文档保留在源码仓库。
+- 主窗口、任务栏和托盘统一使用 `gemprism.png`；启动时自动写入用户级 desktop entry，不再出现游戏手柄或默认 Wayland 图标。
 
 ### 文档
 

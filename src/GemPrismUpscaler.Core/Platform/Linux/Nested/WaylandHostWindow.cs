@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using GemPrismUpscaler.Core.Diagnostics;
 using GemPrismUpscaler.Core.Platform.Linux;
+using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Core.Rendering;
 using Microsoft.Win32.SafeHandles;
 using NWayland;
@@ -36,7 +37,7 @@ namespace GemPrismUpscaler.Core.Platform.Linux.Nested;
 /// </summary>
 public sealed class WaylandHostWindow : IHostWindow
 {
-    private const string AppId = "gemprism-upscaler";
+    private const string AppId = PortalAppId.WindowAppId;
 
     private WlDisplay _display = null!;
     private WlRegistry _registry = null!;
@@ -182,6 +183,16 @@ public sealed class WaylandHostWindow : IHostWindow
         PumpUntil(() => _configured, 1200);
         if (!_configured)
             Log.Warn("wayland host: no initial configure; continuing with the requested size");
+        if (_configured && !startFullscreen)
+        {
+            // KWin may only re-evaluate the maximize button after the first
+            // configure. Re-apply the fixed size (and commit the state) so a
+            // window created from a cold cache does not keep a dead maximize
+            // button next to minimize/close.
+            ApplyWindowSizeLimits();
+            _surface!.Commit();
+            _display.Flush();
+        }
         _visible = true;
 
         Log.Info($"wayland host: buffer={_width}x{_height} logical={_logicalWidth}x{_logicalHeight} " +

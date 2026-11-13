@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using GemPrismUpscaler.Core.Diagnostics;
+using GemPrismUpscaler.Core.Platform.Linux.Portal;
 using GemPrismUpscaler.Views;
 using System;
 using System.Runtime.InteropServices;
@@ -23,6 +24,10 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            // KDE uses the desktop entry for the taskbar icon. Create/replace
+            // it even before a portal feature is used, so the icon is the same
+            // on a fresh machine as it is in the tray.
+            PortalAppId.EnsureDesktopFile();
             Dispatcher.UIThread.UnhandledException += (_, e) =>
             {
                 Log.Error("UI thread unhandled exception", e.Exception);
