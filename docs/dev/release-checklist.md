@@ -6,21 +6,26 @@
 
 ```text
 GemPrismUpscaler-v1.0.0-linux-x64/
-  GemPrismUpscaler
-  gemprism.png
+  GemPrismUpscaler              single-file
+  GemPrismUpscaler.png
+  libSkiaSharp.so
+  libHarfBuzzSharp.so
   LICENSE
   NOTICE
+  SOURCE.txt
   README.md
-  docs/
-  shaders/
+  docs/                         使用说明 + examples
+  licenses/
   runtime/sway/
     sway
     swaymsg
     libwlroots-0.20.so
+    libliftoff.so.0
+    libdisplay-info.so.3
+    libseat.so.1
+    liblua5.4.so.5.4
     xdg-decoration-v2-shim.so
-    LICENSE / LICENSE.wlroots
   runtime/gemprism-vkeyboard
-  <dotnet publish 其余文件>
 ```
 
 要求：
@@ -29,11 +34,11 @@ GemPrismUpscaler-v1.0.0-linux-x64/
 - [x] 用户文档、示例、链接检查
 - [x] `dotnet publish -c Release -r linux-x64 --self-contained` 成功
 - [x] 带固定版本 sway/swaymsg/wlroots/shim/vkeyboard
-- [x] 带内置着色器与示例（或确认已嵌入/无需外部文件）
+- [x] 内置着色器已嵌入；发布包只带使用说明与示例
 - [x] `LICENSE`、`NOTICE`、`README.md`
 - [x] 主程序可执行权限；压缩包保留权限
 - [x] `GemPrismUpscaler-v1.0.0-linux-x64.tar.gz` / `.zip` / `.sha256`
-- [x] 包内不含开发资料、日志、`bin/obj`、测试产物、开发机路径
+- [x] 包内无 DLL/PDB、开发文档、发布清单、日志、测试产物、开发机路径
 
 ## 2. 干净环境验收
 

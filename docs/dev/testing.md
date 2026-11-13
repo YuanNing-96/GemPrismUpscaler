@@ -53,6 +53,10 @@ python3 tools/build_shaders.py
 runtime/sway/sway
 runtime/sway/swaymsg
 runtime/sway/libwlroots-0.20.so
+runtime/sway/libliftoff.so.0
+runtime/sway/libdisplay-info.so.3
+runtime/sway/libseat.so.1
+runtime/sway/liblua5.4.so.5.4
 runtime/sway/xdg-decoration-v2-shim.so
 runtime/gemprism-vkeyboard
 ```

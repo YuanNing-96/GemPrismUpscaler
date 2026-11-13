@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check relative Markdown links in README.md, docs/ and shaders/README.md."""
+"""Check relative Markdown links in the project docs or a release tree."""
 from __future__ import annotations
 
 import re
@@ -11,16 +11,28 @@ LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 FENCE = re.compile(r"```.*?```", re.S)
 
 
-def targets() -> list[Path]:
-    files = [ROOT / "README.md", ROOT / "shaders" / "README.md", ROOT / "tools" / "zero-copy" / "README.md"]
-    files += sorted((ROOT / "docs").rglob("*.md"))
+def expand(path: Path) -> list[Path]:
+    if path.is_dir():
+        return sorted(path.rglob("*.md"))
+    return [path]
+
+
+def targets(argv: list[str]) -> list[Path]:
+    if argv:
+        files: list[Path] = []
+        for arg in argv:
+            files += expand(Path(arg))
+    else:
+        files = [ROOT / "README.md", ROOT / "README-package.md",
+                 ROOT / "shaders" / "README.md", ROOT / "tools" / "zero-copy" / "README.md"]
+        files += sorted((ROOT / "docs").rglob("*.md"))
     return [p for p in files if p.is_file()]
 
 
 def main() -> int:
     missing: list[str] = []
     checked = 0
-    for path in targets():
+    for path in targets(sys.argv[1:]):
         text = FENCE.sub("", path.read_text(encoding="utf-8"))
         for raw in LINK.findall(text):
             target = raw.strip()

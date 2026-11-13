@@ -34,13 +34,15 @@ cd GemPrismUpscaler-v1.0.0-linux-x64
 解压后目录是扁平布局，主要文件：
 
 ```text
-GemPrismUpscaler        主程序（双击启动）
-gemprism.png            图标
-runtime/sway/           私有嵌套合成器：sway/swaymsg/wlroots/装饰 shim
+GemPrismUpscaler        主程序（单文件，双击启动）
+GemPrismUpscaler.png    图标
+libSkiaSharp.so         渲染原生库
+libHarfBuzzSharp.so     文字渲染原生库
+docs/                   使用说明与示例
+runtime/sway/           私有嵌套合成器及依赖库
 runtime/gemprism-vkeyboard
-shaders/                内置超分着色器与 Anime4K 许可证
-docs/                   文档与示例
-LICENSE / NOTICE        许可证与第三方说明
+licenses/               第三方许可证
+LICENSE / NOTICE / SOURCE.txt
 ```
 
 > 如果压缩包在传输过程中丢失了可执行权限，运行一次

@@ -23,8 +23,12 @@
 | wlroots 0.20.2 | MIT | sway 依赖；包含本项目的小补丁，源码与补丁见发布源码。 |
 | xdg-decoration-v2-shim | AGPL-3.0-or-later（本项目） | 本项目编写。 |
 | gemprism-vkeyboard | AGPL-3.0-or-later（本项目）；协议文本 MIT | 基于 `virtual-keyboard-unstable-v1.xml` 的 helper。 |
+| libliftoff | MIT | wlroots 的 DRM 输出依赖，随包分发。 |
+| libdisplay-info | MIT | wlroots 的显示信息解析依赖。 |
+| libseat / seatd | MIT | wlroots 的会话后端依赖。 |
+| Lua 5.4 | MIT | wlroots 的配置/脚本依赖。 |
 
-> 发布包包含 `SOURCE.txt`、`runtime/sway/LICENSE` 与 `LICENSE.wlroots`，并在发布页提供源码获取方式，以满足 AGPL 与 MIT 组件要求。
+> 发布包包含 `SOURCE.txt` 与 `licenses/` 下的 sway/wlroots/Anime4K/可选库许可证，并在发布页提供源码获取方式。
 
 ## 3. 设计与参考
 

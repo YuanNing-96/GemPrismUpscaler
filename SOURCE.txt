@@ -12,8 +12,12 @@ GemPrism-specific patch are available in the project repository:
   docs/dev/third-party.md
 
 Upstream sources:
-  sway:    https://github.com/swaywm/sway (tag 1.12, MIT)
-  wlroots: https://gitlab.freedesktop.org/wlroots/wlroots (0.20.2, MIT)
-  Anime4K: https://github.com/bloc97/Anime4K (MIT)
+  sway:             https://github.com/swaywm/sway (tag 1.12, MIT)
+  wlroots:          https://gitlab.freedesktop.org/wlroots/wlroots (0.20.2, MIT)
+  libliftoff:       https://gitlab.freedesktop.org/emersion/libliftoff (MIT)
+  libdisplay-info:  https://gitlab.freedesktop.org/emersion/libdisplay-info (MIT)
+  seatd/libseat:    https://git.sr.ht/~kennylevinsen/seatd (MIT)
+  Lua 5.4:          https://www.lua.org (MIT)
+  Anime4K:          https://github.com/bloc97/Anime4K (MIT)
 
 The full AGPL-3.0-or-later license text is in LICENSE.

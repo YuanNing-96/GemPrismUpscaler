@@ -33,10 +33,10 @@ v1.0 面向 **KDE Plasma 6 Wayland + XWayland**，主路径是“私有嵌套桌
 
 ### 发布包
 
-- 自包含 .NET 运行时，解压后双击 `GemPrismUpscaler` 即可启动。
-- 随包带私有 sway 1.12（含 cursor-hint IPC 补丁）、swaymsg、wlroots 0.20、装饰 shim 和虚拟键盘 helper。
+- 单文件自包含 .NET 运行时；根目录只有主程序、两个原生渲染库和图标。
+- 随包带私有 sway 1.12（含 cursor-hint IPC 补丁）、swaymsg、wlroots 0.20 及其必要依赖、装饰 shim 和虚拟键盘 helper。
 - 提供 `.tar.gz`、`.zip` 和 SHA-256 校验文件。
-- 随包带用户文档、开发文档、示例、着色器与第三方许可证。
+- 随包只带使用说明和示例；开发/历史文档保留在源码仓库。
 
 ### 文档
 
